@@ -134,11 +134,14 @@ kind does not produce) or `blocked` (a directory or symlink where an output or
 the manifest goes), `2` on a spec error or an `--out` that is not a directory
 (or is a symlink), `0` when everything is current. A `differs` file the build
 would refuse to overwrite and a `stale` file the build would keep say why. It
-then prints the commands that fix it: an `rm --` for each stale file the build
-will not delete (unlisted, or changed since the kit wrote it: check it is not
-yours before running that line) and for each symlink in the way, an `rm -r --`
-for each directory in the way, then the build. Directories and symlinks are
-never read through.
+never prints a command that removes, moves or overwrites a file. When the build
+alone fixes everything (missing or changed outputs, stale files the kit wrote
+that still have its hash: the build removes those), it prints that build as a
+`run:` line, which leaves `--check` clean. When a file needs your decision (not
+written by the kit, changed since, listed without a hash, refused for
+overwriting, or a directory or symlink in the way), it prints no `run:` line,
+only the count of such files and the build to run once you have dealt with
+them. Directories and symlinks are never read through.
 With `--only NAME`, `--check` judges only NAME's files: a stale `NAME.drawio`
 is still reported, but outputs left behind by other or deleted specs are not —
 run the full `--check` in CI. `--no-png` skips rendering and comparing PNGs;
@@ -514,7 +517,8 @@ label kind, lane label widths, the layout fixes (collinear-stub repair, 12 px
 channel margin, label-aware port spacing, the port floor, pill clearance, TB
 lane titles, channel order, whole-pixel ports), the legend, the manifest
 (stale removal, never deleting unlisted files, path safety, the printed
-remedy, directories in the way, deleting and overwriting only files whose
+remedy (and that it never removes a file), directories in the way, deleting
+and overwriting only files whose
 hash matches, unverified old manifests, `--overwrite`, writes by rename, a
 symlinked `--out`), `--only` and PNG stale detection, and the render gate
 itself (text extraction, placement, order, repeats, exit status, the bundle

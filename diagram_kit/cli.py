@@ -291,7 +291,7 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
         elif not have.exists():
             problems.append(Problem("missing", have))
         elif have.read_bytes() != data:
-            problems.append(Problem("differs", have, why=refused.get(have, "")))
+            problems.append(Problem("differs", have, by_hand=have in refused, why=refused.get(have, "")))
     if _blocked(out_dir / MANIFEST):
         problems.append(Problem("blocked", out_dir / MANIFEST, by_hand=True))
     if out_dir.is_dir():
@@ -318,10 +318,23 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
 
 
 def remedy(problems: list[Problem], argv0: str, args: argparse.Namespace) -> list[str]:
-    """Commands that make --check pass again: removals the build will not do, then the build."""
+    """Commands that, run as printed, make --check pass: the build, or nothing.
+
+    No command removes, moves or overwrites a file. A file marked by hand (not
+    written by the kit, changed since, listed without a hash, the build refuses
+    to overwrite it, or a directory or symlink in the way) is the user's to deal
+    with, so while there is one, no command can make --check pass and none is
+    printed. Stale files the kit wrote and that still have its hash need no
+    command either: the build removes them.
+    """
     q = shlex.quote
-    lines = [f"rm -r -- {q(str(p.path))}" if p.kind == "blocked" and not p.path.is_symlink()
-             else f"rm -- {q(str(p.path))}" for p in problems if p.by_hand]
+    lines: list[str] = []  # never an rm: see above
+    if any(p.by_hand for p in problems):
+        return lines
+    return lines + [" ".join(q(c) for c in build_command(argv0, args))]
+
+
+def build_command(argv0: str, args: argparse.Namespace) -> list[str]:
     cmd = ["python", argv0, str(args.specs_dir), "--out", str(args.out)]
     if args.no_png:
         cmd.append("--no-png")
@@ -331,9 +344,7 @@ def remedy(problems: list[Problem], argv0: str, args: argparse.Namespace) -> lis
         cmd += ["--renderer", args.renderer]
     if args.overwrite:
         cmd.append("--overwrite")
-    if any(p.kind != "stale" or not p.by_hand for p in problems):  # a removed directory leaves its output missing
-        lines.append(" ".join(q(c) for c in cmd))
-    return lines
+    return cmd
 
 
 def verify_mermaid(specs: list[Spec]) -> int:
@@ -427,6 +438,11 @@ def main(argv: list[str] | None = None) -> int:
                 argv0 = sys.argv[0] if Path(sys.argv[0]).name == "build.py" else "build.py"
                 for line in remedy(problems, argv0, args):
                     print(f"run: {line}", file=sys.stderr)
+                hand = sum(p.by_hand for p in problems)
+                if hand:
+                    cmd = " ".join(shlex.quote(c) for c in build_command(argv0, args))
+                    print(f"{hand} file(s) above need your decision; the kit prints no command that removes, "
+                          f"moves or overwrites them. Then build again: {cmd}", file=sys.stderr)
                 return 1
             print(f"ok: {len(specs)} spec(s) up to date in {args.out}")
             return 0

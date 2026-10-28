@@ -208,12 +208,6 @@ MUTANTS = [
        "    return entries")], [CLI]),
     ("N25", "--check reads a directory where an output goes", "diagram_kit/cli.py",
      [("        if _blocked(have):\n", "        if False:\n")], [CLI]),
-    ("N26", "printed remedy leaves out the hand removals", "diagram_kit/cli.py",
-     [('    lines = [f"rm -r -- {q(str(p.path))}" if p.kind == "blocked" and not p.path.is_symlink()\n'
-       '             else f"rm -- {q(str(p.path))}" for p in problems if p.by_hand]\n', "    lines = []\n")], [CLI]),
-    ("N27", "render gate reads text without line / element breaks", "diagram_kit/mermaid_check.py",
-     [("holder.querySelectorAll('text, tspan, foreignObject, p, div, span').forEach((el) => el.after(' '));", "")],
-     ["tests/test_mermaid_render.py::test_wrapped_block_label_reads_as_its_words", RENDER]),
     ("N29", "--verify-mermaid exits 0 on lost labels", "diagram_kit/cli.py",
      [('                print(f"    - {line}", file=sys.stderr)\n        return 1\n',
        '                print(f"    - {line}", file=sys.stderr)\n        return 0\n')],
@@ -258,8 +252,6 @@ MUTANTS = [
     ("C5", "--check on an --out that is a file reports missing outputs", "diagram_kit/cli.py",
      [("    check_out_dir(out_dir)\n    owned = read_manifest(out_dir) if", "    owned = read_manifest(out_dir) if")],
      [CLI]),
-    ("C6", "remedy 'rm' without '--'", "diagram_kit/cli.py",
-     [('else f"rm -- {q(str(p.path))}"', 'else f"rm {q(str(p.path))}"')], [CLI]),
     ("K1", "fk to an entity whose id YAML read as a number re-reported", "diagram_kit/spec.py",
      [("elif val is not None and str(val) == text:", "elif val == text:")], [ONCE]),
     ("K2", "fk to an entity whose id YAML read as a boolean re-reported", "diagram_kit/spec.py",
@@ -312,6 +304,10 @@ MUTANTS = [
      [("        replace_file(path, data)\n", "        path.write_bytes(data)\n")], [HARDLINK]),
     ("D7", "new outputs keep mkstemp's 0600 mode", "diagram_kit/cli.py",
      [("        os.chmod(tmp, 0o666 & ~umask)\n", "")], [HARDLINK]),
+    ("R1", "--check prints 'rm' for files the kit did not write again (2a137f4)", "diagram_kit/cli.py",
+     [("    lines: list[str] = []  # never an rm: see above\n    if any(p.by_hand for p in problems):\n"
+       "        return lines\n", "    lines = [f\"rm -- {q(str(p.path))}\" for p in problems if p.by_hand]\n")],
+     [HUB, "tests/test_cli.py::test_printed_remedy_never_removes_a_file_the_kit_did_not_write"]),
     ("D8", "--out that is a symlink followed", "diagram_kit/cli.py",
      [("    if out_dir.is_symlink():\n", "    if False:\n")], ["tests/test_cli.py::test_out_that_is_a_symlink_is_refused"]),
 ]

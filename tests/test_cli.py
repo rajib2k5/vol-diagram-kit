@@ -153,6 +153,10 @@ def add_to_manifest(out: Path, *names: str) -> None:
 
 
 
+def run_lines(stderr: str) -> list[str]:
+    return [ln for ln in stderr.splitlines() if ln.startswith("run: ")]
+
+
 def run_remedy(stderr: str, cwd: Path | None = None) -> None:
     """Run every 'run: ...' line --check printed, as a user would paste them."""
     lines = [ln[len("run: "):] for ln in stderr.splitlines() if ln.startswith("run: ")]
@@ -195,8 +199,8 @@ def test_build_never_deletes_files_the_manifest_does_not_list(built):
     res = run(str(specs), "--out", str(out), "--check")
     assert res.returncode == 1
     assert f"stale    {out / 'old_diagram.drawio'} (not written by the kit: remove it by hand)" in res.stderr
-    assert f"run: rm -- {out / 'old_diagram.drawio'}" in res.stderr
-    run_remedy(res.stderr)
+    assert not run_lines(res.stderr)  # no command deletes a file the kit did not write
+    (out / "old_diagram.drawio").unlink()  # the user's decision
     assert run(str(specs), "--out", str(out), "--check").returncode == 0
     assert (out / "notes.md").exists()
 
@@ -262,6 +266,9 @@ def test_a_directory_where_an_output_goes_is_reported_not_read(built):
     res = run(str(specs), "--out", str(out))
     assert res.returncode == 2 and "Traceback" not in res.stderr
     assert f"error: {out / 'options_backtester_erd.svg'} is not a regular file" in res.stderr
+    res = run(str(specs), "--out", str(out), "--check")
+    assert not run_lines(res.stderr) and "need your decision" in res.stderr
+    (out / "options_backtester_erd.svg").rmdir()  # the user's decision
     res = run(str(specs), "--out", str(out), "--check")
     run_remedy(res.stderr)
     assert run(str(specs), "--out", str(out), "--check").returncode == 0
@@ -332,8 +339,9 @@ def test_a_symlink_where_an_output_goes_is_never_written_through(built, tmp_path
     res = run(str(specs), "--out", str(out), "--check")
     assert res.returncode == 1 and "Traceback" not in res.stderr
     assert f"blocked  {target} (not a regular file, or a symlink: remove it by hand)" in res.stderr
-    assert f"run: rm -- {target}" in res.stderr
-    run_remedy(res.stderr)
+    assert not run_lines(res.stderr)
+    target.unlink()  # the user's decision
+    run_remedy(run(str(specs), "--out", str(out), "--check").stderr)
     assert run(str(specs), "--out", str(out), "--check").returncode == 0
     assert outside.read_text() == "keep" if not dangling else not outside.exists()
 
@@ -353,7 +361,8 @@ def test_a_listed_stale_symlink_is_left_for_removal_by_hand(built, tmp_path):
     assert run(str(specs), "--out", str(out)).returncode == 0
     assert (out / "gone.svg").is_symlink() and outside.read_text() == "keep"
     assert "gone.svg" not in manifest(out)  # only regular files the kit wrote are listed
-    run_remedy(res.stderr)
+    assert not run_lines(res.stderr)
+    (out / "gone.svg").unlink()  # the user's decision
     assert run(str(specs), "--out", str(out), "--check").returncode == 0 and outside.read_text() == "keep"
 
 
@@ -385,11 +394,15 @@ def test_out_that_is_a_file_is_an_error_not_a_crash(tmp_path):
 def test_remedy_for_a_file_name_starting_with_a_dash(built):
     specs, out = built
     (out / "-x.svg").write_text("x")
+    (out / "iv_forecast_pipeline.mmd").unlink()
     res = subprocess.run([sys.executable, str(BUILD), str(specs), "--out", ".", "--check"],
                          capture_output=True, text=True, cwd=out)
-    assert res.returncode == 1 and "run: rm -- -x.svg" in res.stderr
+    assert res.returncode == 1 and "stale    -x.svg (not written by the kit" in res.stderr
+    assert not run_lines(res.stderr)
+    (out / "-x.svg").unlink()  # the user's decision
+    res = subprocess.run([sys.executable, str(BUILD), str(specs), "--out", ".", "--check"],
+                         capture_output=True, text=True, cwd=out)
     run_remedy(res.stderr, cwd=out)
-    assert not (out / "-x.svg").exists()
     assert run(str(specs), "--out", str(out), "--check").returncode == 0
 
 
@@ -422,6 +435,8 @@ def test_a_stale_file_changed_since_the_kit_wrote_it_is_kept_and_reported(tmp_pa
     assert res.returncode == 1
     assert f"stale    {out / 'old.svg'} (changed since the kit wrote it; remove it by hand if unwanted)" in res.stderr
     assert f"stale    {out / 'old.mmd'}\n" in res.stderr  # unchanged: the build removes it
+    assert not run_lines(res.stderr) and "rm --" not in res.stderr  # 2a137f4 printed 'run: rm -- .../old.svg'
+    assert "1 file(s) above need your decision" in res.stderr
     res = run(str(specs), "--out", str(out), "--no-png")
     assert res.returncode == 0, res.stderr
     assert (out / "old.svg").read_text() == "MY OWN NOTES"
@@ -560,3 +575,22 @@ def test_a_bundle_that_does_not_load_exits_2_with_install_steps(chromium, tmp_pa
     assert res.returncode == 2 and "Traceback" not in res.stderr, res.stderr
     assert f"error: DIAGRAM_KIT_MERMAID_JS={bundle} did not load as Mermaid: " in res.stderr
     assert "npm install --prefix" in res.stderr
+
+
+def test_printed_remedy_never_removes_a_file_the_kit_did_not_write(built):
+    """Every 'run:' line, run as printed, leaves --check clean; none removes, moves or overwrites a file."""
+    specs, out = built
+    (specs / "iv_forecast_pipeline.yaml").unlink()  # its outputs: written by the kit, hash unchanged
+    (out / "backtester_daily_loop.mmd").unlink()
+    res = run(str(specs), "--out", str(out), "--check")
+    lines = run_lines(res.stderr)
+    assert len(lines) == 1 and lines[0].startswith("run: python ") and " rm " not in lines[0], res.stderr
+    run_remedy(res.stderr)
+    assert run(str(specs), "--out", str(out), "--check").returncode == 0
+    # now files that are not the kit's: unlisted, changed since, listed without a hash
+    (out / "mine.svg").write_text("MINE")
+    (out / "options_backtester_erd.mmd").write_text("EDITED")
+    res = run(str(specs), "--out", str(out), "--check")
+    assert res.returncode == 1 and not run_lines(res.stderr), res.stderr
+    assert "2 file(s) above need your decision" in res.stderr
+    assert (out / "mine.svg").read_text() == "MINE" and (out / "options_backtester_erd.mmd").read_text() == "EDITED"
