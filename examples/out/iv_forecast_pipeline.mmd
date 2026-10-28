@@ -3,22 +3,22 @@ title: "Implied-vol forecasting pipeline"
 ---
 flowchart TB
     subgraph ingest["Ingest"]
-        cboe(["CBOE CSV<br/><small>EOD option chains</small>"])
-        yfinance{{"yfinance<br/><small>spot + VIX history</small>"}}
+        cboe(["CBOE CSV\nEOD option chains"])
+        yfinance{{"yfinance\nspot + VIX history"}}
     end
     subgraph data["Data platform"]
-        raw[("Raw store<br/><small>partitioned Parquet</small>")]
-        features["Feature builder<br/><small>RV 1d/5d/22d, ATM IV, skew</small>"]
+        raw[("Raw store\npartitioned Parquet")]
+        features["Feature builder\nRV 1d/5d/22d, ATM IV, skew"]
     end
     subgraph modeling["Modeling"]
-        har[["HAR-RV<br/><small>OLS on realized vol lags</small>"]]
-        garch[["GARCH(1,1)<br/><small>Student-t innovations</small>"]]
-        lstm[["LSTM<br/><small>60-day lookback window</small>"]]
-        evaluation["Evaluation<br/><small>QLIKE, MSE, Diebold-Mariano</small>"]
+        har[["HAR-RV\nOLS on realized vol lags"]]
+        garch[["GARCH(1,1)\nStudent-t innovations"]]
+        lstm[["LSTM\n60-day lookback window"]]
+        evaluation["Evaluation\nQLIKE, MSE, Diebold-Mariano"]
     end
     subgraph delivery["Delivery"]
-        export[/"JSON export<br/><small>forecasts.json per tenor</small>"/]
-        app("React app<br/><small>term-structure explorer</small>")
+        export[/"JSON export\nforecasts.json per tenor"/]
+        app("React app\nterm-structure explorer")
     end
     cboe -->|"daily CSV"| raw
     yfinance -->|"REST pull"| raw

@@ -368,7 +368,7 @@ def test_outputs_identical_across_processes_and_hash_seeds(tmp_path):
         dirs.append(out)
     a = {p.name: p.read_bytes() for p in dirs[0].iterdir()}
     b = {p.name: p.read_bytes() for p in dirs[1].iterdir()}
-    assert a.keys() == b.keys() and len(a) == 13
+    assert a.keys() == b.keys() and len(a) == 13 + 1  # outputs + the manifest
     assert [n for n in a if a[n] != b[n]] == []
 
 
@@ -387,3 +387,26 @@ def test_output_has_no_timestamps_or_paths(example_files):
         text = data.decode()
         assert str(ROOT) not in text
         assert "modified=" not in text
+
+
+def test_dashed_edges_get_a_meaning_in_the_legend():
+    """The legend says what a dashed edge means (default 'Async / optional'), or what the spec calls it."""
+    from diagram_kit import flow
+
+    from .conftest import spec_from
+
+    base = """
+        kind: flow
+        title: Legend
+        nodes: [{id: a, label: A, type: source}, {id: b, label: B, type: store}, {id: c, label: C, type: ui}]
+        edges: [{from: a, to: b}, {from: b, to: c, style: dashed}]
+        """
+    texts = [it.text for it in flow.build_scene(spec_from(base)).legend if it.kind == "edge"]
+    assert texts == ["Data flow", "Async / optional"]
+    named = spec_from(base.replace("title: Legend", "title: Legend\n        legend: {dashed: Realized vol (read only)}"))
+    sc = flow.build_scene(named)
+    assert [it.text for it in sc.legend if it.kind == "edge"] == ["Data flow", "Realized vol (read only)"]
+    assert ">Realized vol (read only)</text>" in flow.flow_svg(sc)
+    one_style = spec_from(base.replace("style: dashed", "style: data").replace(
+        "title: Legend", "title: Legend\n        legend: {data: Daily batch}"))
+    assert [it.text for it in flow.build_scene(one_style).legend if it.kind == "edge"] == ["Daily batch"]

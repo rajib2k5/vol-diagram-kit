@@ -1,0 +1,18 @@
+{
+ "_comment": "Files written by vol-diagram-kit's build.py. A build deletes the listed files no spec produces any more, and nothing else. Do not edit.",
+ "files": [
+  "backtester_daily_loop.mmd",
+  "backtester_daily_loop.png",
+  "backtester_daily_loop.svg",
+  "iv_forecast_pipeline.drawio",
+  "iv_forecast_pipeline.lucid.xml",
+  "iv_forecast_pipeline.mmd",
+  "iv_forecast_pipeline.png",
+  "iv_forecast_pipeline.svg",
+  "options_backtester_erd.drawio",
+  "options_backtester_erd.lucid.xml",
+  "options_backtester_erd.mmd",
+  "options_backtester_erd.png",
+  "options_backtester_erd.svg"
+ ]
+}

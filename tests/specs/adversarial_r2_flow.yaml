@@ -1,0 +1,23 @@
+# The labels a second review found Mermaid mangling (12.2.0 and 11.17.2), in
+# every place a flow puts user text: KaTeX '$$', '\n' line breaks, '%%{'
+# directives, 'direction XX' statements, C4 diagram-type words, 'fa:' icons,
+# and runs of spaces (trimmed and collapsed when the spec is loaded).
+kind: flow
+title: 'R2 flow: fees $$ and slippage $$ a%%{x C:\data\nightly fa:fa-user set direction LR'
+direction: TB
+lanes:
+  - {id: ingest, label: 'go direction LR a%%{x'}
+  - {id: model, label: '%%{init: {}}%% C:\new'}
+nodes:
+  - {id: a, label: 'fees $$ and slippage $$', sublabel: 'C:\data\nightly', type: source, lane: ingest}
+  - {id: b, label: 'set direction LR', sublabel: 'regex \d+\n', type: process, lane: ingest}
+  - {id: c, label: '$$}$$ fa:fa-user', sublabel: 'a\nb x \n y', type: model, lane: model}
+  - {id: d, label: '%%{wrap}%% Direction RL', sublabel: 'fab:fa-github x C4Dynamic', type: output, lane: model}
+  - {id: e, label: '  lead  and  trail  ', sublabel: 'P&L in $$ $$x$$', type: store, lane: model}
+edges:
+  - {from: a, to: b, label: 'go direction TB'}
+  - {from: a, to: c, label: 'split rows on \n'}
+  - {from: b, to: c, label: 'a%%{x $$}$$', style: dashed}
+  - {from: b, to: e, label: 'fa:fa-user'}
+  - {from: c, to: d, label: 'C:\data\nightly', style: control}
+  - {from: e, to: d, label: 'x direction rl y C4Container'}

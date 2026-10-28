@@ -1,0 +1,21 @@
+# The labels a second review found Mermaid mangling (12.2.0 and 11.17.2), in
+# every place a sequence diagram puts user text: '<br>' line breaks, '%%{'
+# directives, KaTeX '$$', 'fa:' icons, Mermaid's '¶ß' marker, C4 diagram-type
+# words, and runs of spaces (trimmed and collapsed when the spec is loaded).
+kind: sequence
+title: 'R2 sequence: a%%{x $$x$$ fab:fa-github x direction bt'
+participants:
+  - {id: eng, label: 'Engine a<br/>b ¶ß', type: process}
+  - {id: db, label: '  DB  %%{wrap}%%  '}
+messages:
+  - {from: eng, to: db, label: '<br> fees $$ and slippage $$', note: 'a%%{x a¶ßb'}
+  - loop: '%%{init: {}}%% $$}$$'
+    messages:
+      - {from: db, to: eng, label: 'fab:fa-github x fa:fa-user', kind: return}
+      - alt:
+          - when: 'P&L in $$ regex \d+\n'
+            messages: [{from: eng, to: db, label: 'x<br>y<br>z', kind: async}]
+          - when: 'direction bt <BR/>'
+            messages: [{from: eng, to: eng, label: '$$x$$ C:\data\nightly'}]
+  - opt: 'set direction LR a  b'
+    messages: [{from: db, to: eng, label: 'go direction TB C4Deployment', kind: return}]

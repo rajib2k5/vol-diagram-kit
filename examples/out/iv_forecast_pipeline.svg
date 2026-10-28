@@ -45,20 +45,20 @@
     <polygon points="659,724 654.5,715 663.5,715" fill="#64748B"/>
   </g>
   <g id="edge_6">
-    <path d="M161 794L161 814Q161 822 169 822L457.67 822Q465.67 822 465.67 830L465.67 900" fill="none" stroke="#64748B" stroke-width="1.6" stroke-linejoin="round"/>
-    <polygon points="465.67,908 461.17,899 470.17,899" fill="#64748B"/>
+    <path d="M161 794L161 814Q161 822 169 822L458 822Q466 822 466 830L466 900" fill="none" stroke="#64748B" stroke-width="1.6" stroke-linejoin="round"/>
+    <polygon points="466,908 461.5,899 470.5,899" fill="#64748B"/>
   </g>
   <g id="edge_7">
     <path d="M410 794L410 802Q410 810 418 810L500 810Q508 810 508 818L508 900" fill="none" stroke="#64748B" stroke-width="1.6" stroke-linejoin="round"/>
     <polygon points="508,908 503.5,899 512.5,899" fill="#64748B"/>
   </g>
   <g id="edge_8">
-    <path d="M644.33 794L644.33 814Q644.33 822 636.33 822L558.33 822Q550.33 822 550.33 830L550.33 900" fill="none" stroke="#64748B" stroke-width="1.6" stroke-linejoin="round"/>
-    <polygon points="550.33,908 545.83,899 554.83,899" fill="#64748B"/>
+    <path d="M644 794L644 814Q644 822 636 822L558 822Q550 822 550 830L550 900" fill="none" stroke="#64748B" stroke-width="1.6" stroke-linejoin="round"/>
+    <polygon points="550,908 545.5,899 554.5,899" fill="#64748B"/>
   </g>
   <g id="edge_9">
-    <path d="M670 464L670 483Q670 491 678 491L787 491Q795 491 795 499L795 814Q795 822 787 822L664.33 822Q656.33 822 656.33 830L656.33 900" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5" stroke-linejoin="round"/>
-    <polygon points="656.33,908 651.83,899 660.83,899" fill="#94A3B8"/>
+    <path d="M670 464L670 483Q670 491 678 491L787 491Q795 491 795 499L795 814Q795 822 787 822L664 822Q656 822 656 830L656 900" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5" stroke-linejoin="round"/>
+    <polygon points="656,908 651.5,899 660.5,899" fill="#94A3B8"/>
   </g>
   <g id="edge_10">
     <path d="M561 978L561 1118" fill="none" stroke="#64748B" stroke-width="1.6" stroke-linejoin="round"/>
@@ -69,7 +69,7 @@
     <polygon points="561,1274 556.5,1265 565.5,1265" fill="#64748B"/>
   </g>
   <g id="edge_12">
-    <path d="M603.33 908L603.33 818Q603.33 810 611.33 810L773 810Q781 810 781 802L781 643Q781 635 773 635L576 635Q568 635 568 627L568 602" fill="none" stroke="#6366F1" stroke-width="1.6" stroke-linejoin="round"/>
+    <path d="M603 908L603 818Q603 810 611 810L773 810Q781 810 781 802L781 643Q781 635 773 635L576 635Q568 635 568 627L568 602" fill="none" stroke="#6366F1" stroke-width="1.6" stroke-linejoin="round"/>
     <polygon points="568,594 572.5,603 563.5,603" fill="#6366F1"/>
   </g>
   <g id="node_cboe">
@@ -223,14 +223,14 @@
   <text x="626" y="282.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">daily CSV</text>
   <rect x="632.5" y="292" width="75" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
   <text x="670" y="306.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">REST pull</text>
-  <rect x="615.33" y="856" width="82" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="656.33" y="870.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">realized vol</text>
+  <rect x="615" y="856" width="82" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="656" y="870.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">realized vol</text>
   <rect x="521" y="1024" width="80" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
   <text x="561" y="1038.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">best model</text>
   <rect x="538" y="1222" width="46" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
   <text x="561" y="1236.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">fetch</text>
-  <rect x="556.33" y="832" width="94" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="603.33" y="846.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">retrain trigger</text>
+  <rect x="556" y="832" width="94" height="20" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="603" y="846.14" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="500" text-anchor="middle" fill="#475569">retrain trigger</text>
   <g id="legend">
     <rect x="32" y="1396" width="20" height="20" rx="6" fill="#E0F2FE"/>
     <g transform="translate(34 1398)" fill="none" stroke="#0284C7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -288,6 +288,6 @@
     <text x="760.23" y="1410" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="400" fill="#64748B">Control flow</text>
     <path d="M32 1434H52" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 5"/>
     <polygon points="60,1434 51,1438.5 51,1429.5" fill="#94A3B8"/>
-    <text x="68" y="1438" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="400" fill="#64748B">Dashed</text>
+    <text x="68" y="1438" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="11.5" font-weight="400" fill="#64748B">Async / optional</text>
   </g>
 </svg>

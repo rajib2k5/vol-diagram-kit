@@ -15,25 +15,55 @@ Three kinds exist: `flow`, `erd`, `sequence`. Every kind accepts:
 ## Rules that apply everywhere
 
 - **Ids** (`id`, `lane`, `from`, `to`, column `name`) match `[A-Za-z_][A-Za-z0-9_]*`
-  and must not be a Mermaid keyword, compared ignoring case. Ids are case-sensitive
-  otherwise. Every kind rejects `end`, `graph`, `flowchart`, `subgraph`, `style`,
-  `classDef`, `class`, `click`, `linkStyle`, `direction`, `default`, `call`, `href`,
-  `participant`, `actor`, `loop`, `alt`, `else`, `opt`, `par`, `and`, `note`, `rect`,
-  `critical`, `break`, `autonumber`, `activate`, `deactivate`, `title`, `box`,
-  `create`, `destroy`. Each diagram type adds the words that broke its Mermaid
-  parser (12.2.0 or 11.17.2) in a probe:
-  - flow node / lane ids: `interpolate`, `_self`, `_blank`, `_parent`, `_top`;
-  - ERD entity ids: `one`, `many`, `to`, `erDiagram`, `accTitle`, `accDescr`;
-  - ERD column names **and** column types: `pk`, `fk`, `uk` (any case);
-  - sequence participant ids: `over`, `option`, `par_over`, `off`, `link`, `links`,
-    `properties`, `details`, `sequenceDiagram`, `accTitle`, `accDescr`.
+  and are case-sensitive. In each position (flow node, flow lane, ERD entity,
+  ERD column name, ERD column type, sequence participant) an id is rejected when
+  Mermaid cannot take it there. That list is not written by hand:
+  `scripts/gen_mermaid_reserved.py` rendered every candidate word in every
+  position in three casings with Mermaid 12.2.0 (GitHub) and 11.17.2 and
+  recorded what failed in `diagram_kit/mermaid_reserved.json` (a word that
+  failed in every casing is rejected in any case; otherwise only the failing
+  spellings). Examples:
+  - flow node / lane ids: `end` (but `End` and `END` are fine), `graph`,
+    `flowchart`, `subgraph`, `style`, `class`, `classDef`, `linkStyle`, `click`,
+    `call`, `href`, `interpolate`, `_self`/`_blank`/`_parent`/`_top`,
+    `accDescr` (nodes), `default` (lanes), and JavaScript property names
+    (`constructor`, `toString`, `valueOf`, `hasOwnProperty`, `__proto__`, ...);
+  - ERD entity ids, any case: `end`, `one`, `many`, `to`, `erDiagram`, `style`,
+    `class`, `classDef`, `subgraph`, `__proto__` and the `__define/lookup...__`
+    names (`note`, `title`, `actor`, `participant`, `box`, `direction` are fine);
+  - ERD column names and types, any case: `pk`, `fk`, `uk`, `__proto__`, ...;
+  - sequence participant ids, any case: `participant`, `actor`, `note`, `title`,
+    `box`, `loop`, `alt`, `else`, `opt`, `par`, `and`, `rect`, `critical`,
+    `break`, `end`, `over`, `option`, `off`, `link`, `links`, `properties`,
+    `details`, `create`, `destroy`, `activate`, `deactivate`, `autonumber`, ...
 
-  The error suggests a rename such as `over_id`.
+  Rules for patterns rather than words (each checked against Mermaid by the same
+  script):
+  - any id containing `C4Container`, `C4Component`, `C4Dynamic` or
+    `C4Deployment` (Mermaid's diagram-type detector matches them anywhere in the
+    file and turns it into a C4 diagram);
+  - ERD column types that start with `pk`, `fk` or `uk` (any case) followed by
+    `-`, `(` or `[` (`pk-x`, `FK(1)`, `uk[2]`): Mermaid lexes the key marker;
+  - ERD entity ids, column names and types that start and end with `_` around a
+    letter or digit (`_id_`, `__x__`): Mermaid renders them as Markdown emphasis.
+
+  The error suggests a rename the validator accepts (`end_id`, `c4Container`,
+  `id`).
 - **Text** (labels, notes) is one line. No automatic wrapping: keep labels short.
-  Any printable character the font covers is fine in labels; the Mermaid output
-  escapes it for each context. The one exception is the **title**, which must not
-  contain `<`: Mermaid drops `<word>` from a diagram title as an HTML tag and
-  prints any other `<` as `&lt;`.
+  Leading and trailing spaces are dropped and runs of spaces collapse to one when
+  the spec is loaded (Mermaid and draw.io would do it anyway), so every format
+  shows the same text. The Mermaid output escapes text for each context (entity
+  codes for `# : % $ ¶` everywhere, plus `" < > & \` `` ` `` in flowcharts,
+  `" < > & \ * _ ~` in ERDs, `; <` in sequence diagrams, and the first letter
+  of `direction` and of `C4Container`/`C4Component`/`C4Dynamic`/`C4Deployment`),
+  and `build.py --verify-mermaid` checks that every label renders as written.
+  Two things Mermaid cannot show are rejected:
+  - `<` in a **title**: Mermaid drops `<word>` from a diagram title as an HTML
+    tag and prints any other `<` as `&lt;`;
+  - `¶ß` in a **title**, or in any **flow** or **ERD** text: it is Mermaid's
+    internal marker for `;` and is replaced in the finished SVG whatever the
+    escaping (sequence diagram text can show it; the subtitle is not in the
+    `.mmd`, so it can too). Write `¶ ß`.
 - **Characters**: only characters the bundled PNG font can draw are accepted
   (printable ASCII, Latin-1, and `– — ‘ ’ “ ” • … → ← ↑ ↓ ↔ × · ≤ ≥ ≈ ≠ ± σ μ Δ Σ β θ λ ρ τ ν ω √ ∞ €`).
   Anything else (emoji, `⇒`, CJK) is rejected with the offending code point.
@@ -57,7 +87,7 @@ Architecture, data-flow and process diagrams.
 | `lanes`     | no  | list of lane | — | swimlanes / containers (see below) |
 | `nodes`     | yes | list of node | — | at least one |
 | `edges`     | no  | list of edge | — | |
-| `legend`    | no  | bool | `true` | node-type legend (plus edge styles when more than one is used) |
+| `legend`    | no  | bool or map | `true` | node-type legend, plus edge styles when more than one is used or the map names one; a map from edge style to its legend text (`{dashed: "Realized vol (read only)"}`) turns the legend on and says what a style means. Defaults: `data` "Data flow", `control` "Control flow", `dashed` "Async / optional" |
 
 **lane**: `id`, `label`.
 
@@ -107,9 +137,13 @@ least one node. A lane is a rounded container around its nodes:
 | ui | rounded `("…")` |
 
 Lanes become `subgraph`s; colours become `classDef`/`style`/`linkStyle` lines.
-Edge labels are quoted (`-->|"fit (daily)"|`), and `#`, `"`, `<`, `>`, `&`, `` ` ``
-and `:` in any label become Mermaid entity codes (`#35;`, `#quot;`, ...), which
-render as the original text.
+Edge labels are quoted (`-->|"fit (daily)"|`), and `#`, `:`, `%`, `$`, `¶`, `"`,
+`<`, `>`, `&`, `` ` `` and `\` in any label become Mermaid entity codes (`#35;`,
+`#58;`, `#37;`, `#36;`, `#182;`, `#quot;`, ...), which render as the original
+text; so do the first letters of `direction` and of the C4 diagram-type words.
+A sublabel follows its label after a `\n` line break: the same size as the
+label, not smaller as in the SVG (an HTML tag such as `<small>` would send the
+label down a Mermaid path that undoes the escaping).
 Mermaid lays the graph out itself, so its geometry differs from the SVG.
 
 ### Full example
@@ -193,8 +227,8 @@ Entity-relationship diagrams. Always laid out left→right with referenced
 
 | key        | required | default | notes |
 |------------|----------|---------|-------|
-| `name`     | yes | | unique within the entity |
-| `type`     | yes | | `[A-Za-z_][A-Za-z0-9_-[]()]*` — Mermaid's erDiagram limit, so `numeric(12-4)` not `numeric(12,4)` |
+| `name`     | yes | | unique within the entity; not `pk`/`fk`/`uk` (any case) or another name Mermaid cannot take (see "Ids") |
+| `type`     | yes | | `[A-Za-z_][A-Za-z0-9_-[]()]*` — Mermaid's erDiagram limit, so `numeric(12-4)` not `numeric(12,4)`; not starting with `pk`/`fk`/`uk` + `-`, `(` or `[` |
 | `pk`       | no  | `false` | several `pk: true` columns = composite key |
 | `fk`       | no  | | `"entity.column"`; target must exist; self-references are rejected |
 | `nullable` | no  | `false` | drawn as `type?`; cannot be combined with `pk` |

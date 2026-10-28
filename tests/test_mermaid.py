@@ -31,7 +31,7 @@ title: "Tiny \\"flow\\""
 ---
 flowchart TB
     subgraph ing["Ingest"]
-        csv(["CSV<br/><small>daily #lt;raw#gt;</small>"])
+        csv(["CSV\\ndaily #lt;raw#gt;"])
         db[("DB")]
     end
     subgraph srv["Serve"]
@@ -170,3 +170,19 @@ sequenceDiagram
     end
 """
     assert sequence_mermaid(spec) == expected
+
+
+def test_gate_counts_each_use_of_a_label():
+    """The render gate's comparison (no browser): a label used twice must be rendered twice."""
+    from diagram_kit.mermaid_check import label_problems
+
+    spec = spec_from("""
+        kind: flow
+        title: Count
+        nodes: [{id: a, label: fit, type: model}, {id: b, label: fit, type: model}]
+        """)
+    assert label_problems(spec, "Count fit fit") == []
+    probs = label_problems(spec, "Count fit")
+    assert [p.split(";")[0] for p in probs] == ["nodes[0].label: expected 'fit' 2x, rendered 1x",
+                                                "nodes[1].label: expected 'fit' 2x, rendered 1x"]
+    assert label_problems(spec, "Count fitness") != []

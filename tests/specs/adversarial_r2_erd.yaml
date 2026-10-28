@@ -1,0 +1,33 @@
+# The labels a second review found Mermaid mangling (12.2.0 and 11.17.2), in
+# every place an ERD puts user text: Markdown '*' '_', '~x~' generics, KaTeX
+# '$$', '%%{' directives, 'direction xx' statements (any case) and C4
+# diagram-type words.
+kind: erd
+title: 'R2 ERD: has *many* legs a _b_ c Option~Greeks~ $$x$$ x direction rl y'
+entities:
+  - id: contract
+    label: 'x direction rl y'
+    columns:
+      - {name: contract_id, type: bigint, pk: true}
+      - {name: snake_case_, type: List_int_}
+  - id: fill
+    label: 'has *many* legs'
+    columns:
+      - {name: fill_id, type: bigint, pk: true}
+      - {name: contract_id, type: bigint, fk: contract.contract_id}
+  - id: leg
+    label: '**bold** a _b_ c _id_'
+    columns:
+      - {name: leg_id, type: bigint, pk: true}
+      - {name: fill_id, type: bigint, fk: fill.fill_id}
+  - id: quote
+    label: 'Option~Greeks~ List~int~ Map~K,V~ C4Component'
+    columns:
+      - {name: quote_id, type: bigint, pk: true}
+      - {name: leg_id, type: bigint, fk: leg.leg_id}
+      - {name: contract_id, type: bigint, fk: contract.contract_id, nullable: true}
+relations:
+  - {from: fill.contract_id, to: contract.contract_id, label: 'fees $$ and slippage $$'}
+  - {from: leg.fill_id, to: fill.fill_id, cardinality: "1..*", label: '$$x$$ $$}$$ a%%{x'}
+  - {from: quote.leg_id, to: leg.leg_id, label: 'go direction LR price * qty * mult'}
+  - {from: quote.contract_id, to: contract.contract_id, label: 'snake_case_ id C:\data\nightly'}

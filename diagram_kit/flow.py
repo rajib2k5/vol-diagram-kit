@@ -23,7 +23,9 @@ TEXT_X = 56.0  # 14 pad + 30 badge + 12 gap
 LANE_LABEL_SIZE = 11.0
 LANE_LABEL_LS = 0.8
 LANE_LABEL_X = 16.0  # inset from the lane's left edge (and kept free on the right)
-EDGE_STYLE_NAMES = {"data": "Data flow", "control": "Control flow", "dashed": "Dashed"}
+# Default legend text per edge style (what the style means, not how it looks);
+# a spec can name its own with ``legend: {dashed: ...}``.
+EDGE_STYLE_NAMES = {"data": "Data flow", "control": "Control flow", "dashed": "Async / optional"}
 
 
 @dataclass
@@ -164,9 +166,11 @@ def build_scene(spec: FlowSpec) -> FlowScene:
                 text = tok["caption"].title() if t != "ui" else "UI"
                 legend.append(LegendItem("node", t, text, w=28.0 + fit_width(text, 11.5)))
         styles = [s for s in theme.EDGE_STYLES if any(e.style == s for e in spec.edges)]
-        if len(styles) > 1:
+        named = dict(spec.edge_legend)
+        # one style needs no key unless the spec says what it means
+        if len(styles) > 1 or any(s in named for s in styles):
             for s in styles:
-                text = EDGE_STYLE_NAMES[s]
+                text = named.get(s, EDGE_STYLE_NAMES[s])
                 legend.append(LegendItem("edge", s, text, w=36.0 + fit_width(text, 11.5)))
     legend_h = 0.0
     legend_w = 0.0

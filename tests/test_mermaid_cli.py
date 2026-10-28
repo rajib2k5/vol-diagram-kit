@@ -3,7 +3,7 @@
 Skipped unless DIAGRAM_KIT_MMDC points at an ``mmdc`` binary. mmdc drives a
 headless Chromium through Puppeteer; set PUPPETEER_EXECUTABLE_PATH to an
 existing Chrome/Chromium (e.g. Playwright's) to avoid a browser download.
-See README "Validating Mermaid".
+See README "Checking Mermaid before a commit".
 """
 
 from __future__ import annotations

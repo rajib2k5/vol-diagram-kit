@@ -120,6 +120,63 @@ EXTRA_FLOWS = {
           - {from: spec, to: review}
           - {from: review, to: run, label: approve}
         """,
+    # TB stage lanes: the edge into the second lane crosses its head, where the title is
+    "tb_edge_under_lane_title": """
+        kind: flow
+        title: Edge under a lane title
+        direction: TB
+        lanes:
+          - {id: ingest, label: Ingest}
+          - {id: model, label: Model fitting and scoring}
+        nodes:
+          - {id: pull, label: Pull quotes, type: source, lane: ingest}
+          - {id: fit, label: Fit, type: model, lane: model}
+        edges:
+          - {from: pull, to: fit}
+        """,
+    # Fuzz spec 21, reduced: in TB the pill of n1 -> n7 is wider than n7 and
+    # reached over the long edge n2 -> n9 passing beside it.
+    "tb_pill_beside_long_edge": """
+        kind: flow
+        title: Pill beside a long edge
+        direction: TB
+        nodes:
+          - {id: n1, label: Ticks, type: store}
+          - {id: n2, label: Quotes Model Surface, type: ui}
+          - {id: n6, label: Push, type: external}
+          - {id: n7, label: Iv Ticks, type: ui}
+          - {id: n9, label: Best Scores Csv, type: external}
+        edges:
+          - {from: n7, to: n9}
+          - {from: n2, to: n9}
+          - {from: n1, to: n2}
+          - {from: n1, to: n7, label: surface forecasts pull}
+          - {from: n6, to: n7}
+          - {from: n2, to: n6}
+        """,
+    # Fuzz spec 132, reduced: one hop left its rank on the line where another
+    # entered the next, and the two shared a stretch of that line.
+    "lr_fan_in_collinear": """
+        kind: flow
+        title: Fan-in across lanes
+        lanes:
+          - {id: l0, label: surface quotes}
+          - {id: l1, label: clean scores skew}
+          - {id: l2, label: forecasts pull clean}
+        nodes:
+          - {id: n1, label: Vol Rest, type: source, lane: l0}
+          - {id: n2, label: Forecasts, type: store, lane: l0}
+          - {id: n3, label: Forecasts, type: external, lane: l1}
+          - {id: n5, label: Pull, type: output, lane: l1}
+          - {id: n6, label: Weights Fit, type: model, lane: l2}
+          - {id: n7, label: Csv Pull, type: store, lane: l2}
+        edges:
+          - {from: n6, to: n7}
+          - {from: n3, to: n7}
+          - {from: n5, to: n7}
+          - {from: n1, to: n7}
+          - {from: n2, to: n7}
+        """,
 }
 
 
@@ -169,9 +226,15 @@ def flow_problems(sc: flow.FlowScene) -> list[str]:
     lanes = {g.lane.id: (g.x, g.y, g.w, g.h) for g in sc.lanes}
     for g in sc.lanes:
         # SVG: upper-cased, bold 11 px, 0.8 letter-spacing, 16 px in from the left edge
-        ink_right = g.x + 16 + text_width(g.lane.label.upper(), 11, True, 0.8)
+        text_w = text_width(g.lane.label.upper(), 11, True, 0.8)
+        ink_right = g.x + 16 + text_w
         if ink_right > g.x + g.w - 8:
             probs.append(f"lane {g.lane.id} label overflows by {ink_right - (g.x + g.w - 8):.1f} px")
+        # baseline 20 px down: the title's ink runs from y + 10 to y + 23
+        title = (g.x + 16, g.y + 10, text_w, 13)
+        for e in sc.edges:
+            if polyline_hits_rect(e.points, title):
+                probs.append(f"edge {e.index} crosses the title of lane {g.lane.id}")
     for g in sc.nodes:
         if g.node.lane and not contains(lanes[g.node.lane], cards[g.node.id]):
             probs.append(f"card {g.node.id} sticks out of lane {g.node.lane}")
@@ -366,6 +429,39 @@ def test_hops_closer_than_edge_sep_get_separate_channels():
     top = res.boxes["p"].y
     assert res.boxes["q"].y == top
     assert {y - top for _, y in a.points} == {20, 60} and {y - top for _, y in b.points} == {68, 108}
+    assert not too_close(a.points, b.points, EDGE_SEP)
+
+
+def test_hops_from_close_ports_turn_in_different_channels():
+    """ERD marker sub-ports sit 10 px apart on one row: one hop leaves up, the other down.
+
+    Their stubs are that close by design, but the turns (40-100 and 110-170,
+    10 px apart end to end) must not share a channel and read as one line.
+    """
+    from diagram_kit.layered import LBox, LEdge, Params, layout
+
+    res = layout([LBox("p", 120, 280), LBox("q", 120, 280)],
+                 [LEdge(0, "p", "q", src_port=100, dst_port=40), LEdge(1, "p", "q", src_port=110, dst_port=170)],
+                 [], Params(direction="LR"))
+    a, b = res.edges[0], res.edges[1]
+    top = res.boxes["p"].y
+    assert res.boxes["q"].y == top
+    assert [y - top for _, y in a.points] == [100, 100, 40, 40] and [y - top for _, y in b.points] == [110, 110, 170, 170]
+    assert not too_close(a.points[1:3], b.points[1:3], EDGE_SEP)
+
+
+def test_squeezed_ports_stay_edge_sep_apart():
+    """A pill far wider than its target squeezes the ports onto the box; neighbours still keep EDGE_SEP.
+
+    The pill of c -> t wants its neighbour 706 px away on a 176 px box. Scaling
+    every gap by the same factor left a and b 9.6 px apart.
+    """
+    from diagram_kit.layered import LBox, LEdge, layout
+
+    res = layout([LBox("a", 176, 56), LBox("b", 176, 56), LBox("c", 176, 56), LBox("t", 176, 56)],
+                 [LEdge(0, "a", "t"), LEdge(1, "b", "t"), LEdge(2, "c", "t", label=(1400.0, 20.0))],
+                 [], flow.params_for("TB"))
+    a, b = res.edges[0], res.edges[1]
     assert not too_close(a.points, b.points, EDGE_SEP)
 
 

@@ -9,9 +9,13 @@ Pipeline:
   5. order each rank by barycenter sweeps, keeping the order with the fewest
      crossings
   6. place nodes on the cross axis by repeated neighbour-averaging, solved per
-     stack with isotonic regression (keeps order and minimum gaps)
-  7. spread ports, give every vertical hop in a gap its own channel, pack edge
-     labels into a label zone next to the target, then size the gaps
+     stack with isotonic regression (keeps order and minimum gaps, wide enough
+     that a label pill clears its neighbours' edges); in TB keep edges off the
+     lane titles
+  7. spread ports (their order is known from step 5), give every vertical hop
+     in a gap its own channel, turning first where it leaves on another hop's
+     line, pack edge labels into a label zone next to the target, then size
+     the gaps
   8. emit absolute geometry
 
 Coordinates are computed on a (main, cross) frame - main runs along the flow
@@ -110,7 +114,11 @@ def _r(v: float) -> float:
 
 def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
            lane_min_w: dict[str, float] | None = None) -> LayoutResult:
-    """``lane_min_w``: minimum lane width (x extent) per lane id, e.g. to fit its label."""
+    """``lane_min_w``: minimum lane width (x extent) per lane id, e.g. to fit its label.
+
+    In TB that much of a lane's head, from its left edge, is also kept free of
+    edges (the label sits there).
+    """
     lane_min_w = lane_min_w or {}
     lr = p.direction == "LR"
     n = len(boxes)
@@ -292,6 +300,51 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
             best = [list(layer) for layer in cur]
     layers = best
 
+    # ---------------------------------------------------- 5b. port offsets
+    # Ports on a side follow the order of their hops' other ends, which the
+    # ordering has fixed (a layer runs track by track, in cross order), so
+    # each port's offset from its box centre is known before placement.
+    layer_pos = {v: i for layer in layers for i, v in enumerate(layer)}
+    side_ends: dict[tuple[int, str], list[tuple[int, int, int]]] = {}
+    for ci, (chain, (u, v, e, up, vp)) in enumerate(chains):
+        nxt, prv = chain[1], chain[-2]
+        side_ends.setdefault((u, "out"), []).append((layer_pos[nxt], e.key, ci))
+        side_ends.setdefault((v, "in"), []).append((layer_pos[prv], e.key, ci))
+    port_rel: dict[tuple[int, str], float] = {}  # (chain index, 'out'|'in') -> offset from the box centre
+    side_chains: dict[tuple[int, str], list[int]] = {}
+    pill_half: dict[int, float] = {}  # chain index -> half the pill's cross extent (labelled edges, at the target)
+    for (node, side), ends in side_ends.items():
+        ends.sort()
+        k = len(ends)
+        spacing = min(p.port_spacing, l_breadth[node] / (k + 1))
+        # A label pill sits across its edge just before the target; keep the
+        # neighbouring stubs out from under it. In LR the pill is only PILL_H
+        # across, so this changes nothing; in TB pills are wide.
+        half = []
+        for _, _key, ci in ends:
+            e = chains[ci][1][2]
+            half.append((e.label[1] if lr else e.label[0]) / 2 if side == "in" and e.label is not None else 0.0)
+        offs = [0.0]
+        for i in range(1, k):
+            need = max(half[i - 1], half[i])
+            offs.append(offs[-1] + (max(spacing, need + p.edge_sep / 2) if need else spacing))
+        span = offs[-1]
+        room_ = l_breadth[node] - 12.0
+        if span > room_ > 0:
+            # squeeze only what each gap has above edge_sep, so no two
+            # neighbours end up closer than that
+            floor = min(p.edge_sep, room_ / (k - 1))
+            squeeze = (room_ - floor * (k - 1)) / (span - floor * (k - 1))
+            offs = [floor * i + (o - floor * i) * squeeze for i, o in enumerate(offs)]
+            span = room_
+        side_chains[(node, side)] = [ci for _, _key, ci in ends]
+        for i, (_, key, ci) in enumerate(ends):
+            if half[i]:
+                pill_half[ci] = half[i]
+            chain, (u, v, e, up, vp) = chains[ci]
+            fixed = up if side == "out" else vp
+            port_rel[(ci, side)] = fixed - l_breadth[node] / 2 if fixed is not None else offs[i] - span / 2
+
     # ------------------------------------------------------ 6. cross coords
     # port offsets from the box centre for fixed ports (ERD rows)
     def port_off(v: int, port: float | None) -> float:
@@ -317,10 +370,30 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
         for v in layer:
             stacks.setdefault((r, l_track[v]), []).append(v)
 
+    # In the label zone before a rank every hop runs at the point where it
+    # enters that rank: a dummy at its centre, a box at its in-ports. A pill
+    # wider than its box (TB) reaches over its stack neighbours' entries, so
+    # keep neighbours apart until each pill clears them by edge_sep / 2.
+    entries: list[list[float]] = [[0.0] if l_dummy[v] else [] for v in range(total)]  # offsets from centre
+    pills: list[list[tuple[float, float]]] = [[] for _ in range(total)]
+    for ci, (chain, (u, v, e, up, vp)) in enumerate(chains):
+        rel = port_rel[(ci, "in")]
+        entries[v].append(rel)
+        if e.label is not None:
+            half = (e.label[1] if lr else e.label[0]) / 2
+            pills[v].append((rel - half, rel + half))
+    pill_gap: dict[tuple[int, int], float] = {}
+    for items in stacks.values():
+        for a, b in zip(items, items[1:]):
+            reach = [hi - min(entries[b]) for _, hi in pills[a] if entries[b]]
+            reach += [max(entries[a]) - lo for lo, _ in pills[b] if entries[a]]
+            if reach:
+                pill_gap[(a, b)] = max(reach) + p.edge_sep / 2 - l_breadth[a] / 2 - l_breadth[b] / 2
+
     def gap_between(a: int, b: int) -> float:
         if l_dummy[a] or l_dummy[b]:
-            return p.dummy_gap
-        return p.node_gap
+            return max(p.dummy_gap, pill_gap.get((a, b), 0.0))
+        return max(p.node_gap, pill_gap.get((a, b), 0.0))
 
     center = [0.0] * total
     for (r, t), items in stacks.items():
@@ -421,6 +494,17 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
     head_cross = p.lane_head if (has_lanes and lr) else 0.0
     head_main = p.lane_head if (has_lanes and not lr) else 0.0
     pad = p.lane_pad if has_lanes else 0.0
+    # TB: a lane's title sits at the left of its head, and every hop into the
+    # lane's first rank crosses that head. The title takes lane_min_w from the
+    # lane's left edge; content that would put a hop through it moves right.
+    title_room = [0.0] * len(tracks)  # from the band's left edge to the first hop allowed
+    if not lr:
+        for a, b, ci, h in segments:
+            t = l_track[b]
+            for lid in tracks[t]:
+                if len(tracks[t]) > 1 and lane_span[lid][0] == l_rank[b] > 0:
+                    rel = port_rel[(ci, "in")] if h == len(chains[ci][0]) - 2 else 0.0
+                    title_room[t] = max(title_room[t], lane_min_w.get(lid, 0.0) - (center[b] + rel - track_lo[t]))
     track_origin = []
     band = []
     cursor = 0.0
@@ -434,61 +518,44 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
         if not lr:
             need = max((lane_min_w.get(lid, 0.0) for lid in tracks[t]), default=0.0)
             grow = 2.0 * math.ceil(max(0.0, need - (extent + 2 * pad)) / 2)  # even: keeps whole pixels
-        start = cursor + pad + head_cross + grow / 2
+        # content moved right of a lane title takes its room from the right side first
+        shift = math.ceil(max(0.0, title_room[t] - pad - grow / 2))
+        right = pad + grow / 2 - min(shift, grow / 2)
+        start = cursor + pad + head_cross + grow / 2 + shift
         track_origin.append(start - track_lo[t])
-        band.append((cursor, start + extent + pad + grow / 2))
-        cursor = start + extent + pad + grow / 2 + (p.lane_gap if has_lanes else p.node_gap * 2)
+        band.append((cursor, start + extent + right))
+        cursor = start + extent + right + (p.lane_gap if has_lanes else p.node_gap * 2)
     cross = [track_origin[l_track[v]] + center[v] for v in range(total)]
 
     # ----------------------------------------------------------- 7. ports
     # port cross-coordinate of every chain end
-    side_ends: dict[tuple[int, str], list[tuple[float, int, int]]] = {}
-    for ci, (chain, (u, v, e, up, vp)) in enumerate(chains):
-        nxt, prv = chain[1], chain[-2]
-        side_ends.setdefault((u, "out"), []).append((cross[nxt], e.key, ci))
-        side_ends.setdefault((v, "in"), []).append((cross[prv], e.key, ci))
+    # (auto ports on whole pixels: distances between them stay exact)
     port_cross: dict[tuple[int, str], float] = {}  # (chain index, 'out'|'in') -> cross coordinate
-    side_chains: dict[tuple[int, str], list[int]] = {}
-    for (node, side), ends in side_ends.items():
-        ends.sort()
-        k = len(ends)
-        spacing = min(p.port_spacing, l_breadth[node] / (k + 1))
-        # A label pill sits across its edge just before the target; keep the
-        # neighbouring stubs out from under it. In LR the pill is only PILL_H
-        # across, so this changes nothing; in TB pills are wide.
-        half = []
-        for _, _key, ci in ends:
-            e = chains[ci][1][2]
-            half.append((e.label[1] if lr else e.label[0]) / 2 if side == "in" and e.label is not None else 0.0)
-        offs = [0.0]
-        for i in range(1, k):
-            need = max(half[i - 1], half[i])
-            offs.append(offs[-1] + (max(spacing, need + p.edge_sep / 2) if need else spacing))
-        span = offs[-1]
-        room_ = l_breadth[node] - 12.0
-        if span > room_ > 0:
-            offs = [o * room_ / span for o in offs]
-            span = room_
-        top = cross[node] - l_breadth[node] / 2
-        side_chains[(node, side)] = [ci for _, _key, ci in ends]
-        for i, (_, key, ci) in enumerate(ends):
-            chain, (u, v, e, up, vp) = chains[ci]
-            fixed = up if side == "out" else vp
-            if fixed is not None:
-                port_cross[(ci, side)] = top + fixed
-            else:
-                port_cross[(ci, side)] = cross[node] + offs[i] - span / 2
+    for (ci, side), rel in port_rel.items():
+        chain, (u, v, e, up, vp) = chains[ci]
+        c = cross[u if side == "out" else v] + rel
+        port_cross[(ci, side)] = c if (up if side == "out" else vp) is not None else float(round(c))
 
     # remove tiny jogs: if an auto port is within a few px of where its hop
     # comes from, slide the port so the run is perfectly straight
     def fits(node: int, c: float) -> bool:
         return cross[node] - l_breadth[node] / 2 + 6 <= c <= cross[node] + l_breadth[node] / 2 - 6
 
+    def pill_clear(node: int, side: str, ci: int, c: float) -> bool:
+        """Would chain ci's port at c keep the pills on that side clear of the other ports (as spread)?"""
+        if side != "in":
+            return True
+        for cj in side_chains[(node, side)]:
+            need = max(pill_half.get(ci, 0.0), pill_half.get(cj, 0.0))
+            if cj != ci and need and abs(c - port_cross[(cj, side)]) < need + p.edge_sep / 2:
+                return False
+        return True
+
     for ci, (chain, (u, v, e, up, vp)) in enumerate(chains):
         if vp is None:
             ca = port_cross[(ci, "out")] if len(chain) == 2 else cross[chain[-2]]
             cb = port_cross[(ci, "in")]
-            if 0 < abs(ca - cb) < p.jog_snap and fits(v, ca):
+            if 0 < abs(ca - cb) < p.jog_snap and fits(v, ca) and pill_clear(v, "in", ci, ca):
                 port_cross[(ci, "in")] = ca
                 continue
         if up is None:
@@ -525,7 +592,7 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
         far_end = end_cross(ci, h, "b" if which == "a" else "a")
         facing = "b" if which == "a" else "a"
         for c in sorted((avoid - p.edge_sep, avoid + p.edge_sep), key=lambda c: (abs(c - far_end), abs(c - cur))):
-            if not fits(node, c):
+            if not fits(node, c) or not pill_clear(node, side, ci, c):
                 continue
             # keep port order on the side (no new crossings) and the spacing
             if any(abs(c - port_cross[(cj, side)]) < p.edge_sep or (c - port_cross[(cj, side)]) * (cur - port_cross[(cj, side)]) < 0
@@ -563,17 +630,31 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
     for r, hops in gap_hops.items():
         downs = sorted([hp for hp in hops if hp[3] - hp[2] >= 1], key=lambda hp: (hp[2], hp[3], hp[0]))
         ups = sorted([hp for hp in hops if hp[2] - hp[3] >= 1], key=lambda hp: (-hp[2], -hp[3], hp[0]))
+        bent = downs + ups
+        # A hop that leaves the rank within edge_sep of where another enters the
+        # next one must turn in an earlier channel (higher slot), or the two runs
+        # overlap on one line. Place the later one first; on a cycle, keep the
+        # sorted order.
+        later = [[j for j, hp in enumerate(bent) if j != i and abs(bent[i][2] - hp[3]) < p.edge_sep]
+                 for i in range(len(bent))]
+        placed = [False] * len(bent)
+        slot_of = [0] * len(bent)
         slots: list[list[tuple[float, float]]] = []
-        for ci, h, ca, cb in downs + ups:
+        for _ in range(len(bent)):
+            i = next((i for i in range(len(bent)) if not placed[i] and all(placed[j] for j in later[i])),
+                     next(i for i in range(len(bent)) if not placed[i]))
+            ci, h, ca, cb = bent[i]
             lo, hi = min(ca, cb), max(ca, cb)
-            for s, occ in enumerate(slots):
+            first = max((slot_of[j] + 1 for j in later[i] if placed[j]), default=0)
+            for s in range(first, len(slots) + 1):
+                if s == len(slots):
+                    slots.append([])
+                occ = slots[s]
                 if all(hi + p.edge_sep <= o_lo or lo - p.edge_sep >= o_hi for o_lo, o_hi in occ):
                     occ.append((lo, hi))
-                    channel_of[(ci, h)] = s
                     break
-            else:
-                channel_of[(ci, h)] = len(slots)
-                slots.append([(lo, hi)])
+            channel_of[(ci, h)] = slot_of[i] = s
+            placed[i] = True
         nchannels[r] = len(slots)
         # labels ride on the last hop of their chain
         labs = []
