@@ -23,6 +23,7 @@ output.
 from __future__ import annotations
 
 import heapq
+import math
 from dataclasses import dataclass, field
 
 
@@ -56,6 +57,7 @@ class Params:
     stub_out: float = 18.0  # straight run leaving a box before the first bend
     stub_in: float = 22.0  # straight run entering a box (arrow lives here)
     channel_spacing: float = 12.0
+    edge_sep: float = 12.0  # parallel runs of different edges stay at least this far apart
     label_margin: float = 10.0
     lane_pad: float = 20.0
     lane_head: float = 30.0
@@ -106,7 +108,10 @@ def _r(v: float) -> float:
     return round(v, 2)
 
 
-def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -> LayoutResult:
+def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params,
+           lane_min_w: dict[str, float] | None = None) -> LayoutResult:
+    """``lane_min_w``: minimum lane width (x extent) per lane id, e.g. to fit its label."""
+    lane_min_w = lane_min_w or {}
     lr = p.direction == "LR"
     n = len(boxes)
     idx = {b.id: i for i, b in enumerate(boxes)}
@@ -422,11 +427,17 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -
     for t in range(len(tracks)):
         if track_lo[t] == float("inf"):
             track_lo[t] = track_hi[t] = 0.0
-        start = cursor + pad + head_cross
-        track_origin.append(start - track_lo[t])
         extent = track_hi[t] - track_lo[t]
-        band.append((cursor, start + extent + pad))
-        cursor = start + extent + pad + (p.lane_gap if has_lanes else p.node_gap * 2)
+        # TB: a track's band is the width of its lanes; widen it (content
+        # centred) when a lane needs more, e.g. for its label.
+        grow = 0.0
+        if not lr:
+            need = max((lane_min_w.get(lid, 0.0) for lid in tracks[t]), default=0.0)
+            grow = 2.0 * math.ceil(max(0.0, need - (extent + 2 * pad)) / 2)  # even: keeps whole pixels
+        start = cursor + pad + head_cross + grow / 2
+        track_origin.append(start - track_lo[t])
+        band.append((cursor, start + extent + pad + grow / 2))
+        cursor = start + extent + pad + grow / 2 + (p.lane_gap if has_lanes else p.node_gap * 2)
     cross = [track_origin[l_track[v]] + center[v] for v in range(total)]
 
     # ----------------------------------------------------------- 7. ports
@@ -437,18 +448,36 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -
         side_ends.setdefault((u, "out"), []).append((cross[nxt], e.key, ci))
         side_ends.setdefault((v, "in"), []).append((cross[prv], e.key, ci))
     port_cross: dict[tuple[int, str], float] = {}  # (chain index, 'out'|'in') -> cross coordinate
+    side_chains: dict[tuple[int, str], list[int]] = {}
     for (node, side), ends in side_ends.items():
         ends.sort()
         k = len(ends)
         spacing = min(p.port_spacing, l_breadth[node] / (k + 1))
+        # A label pill sits across its edge just before the target; keep the
+        # neighbouring stubs out from under it. In LR the pill is only PILL_H
+        # across, so this changes nothing; in TB pills are wide.
+        half = []
+        for _, _key, ci in ends:
+            e = chains[ci][1][2]
+            half.append((e.label[1] if lr else e.label[0]) / 2 if side == "in" and e.label is not None else 0.0)
+        offs = [0.0]
+        for i in range(1, k):
+            need = max(half[i - 1], half[i])
+            offs.append(offs[-1] + (max(spacing, need + p.edge_sep / 2) if need else spacing))
+        span = offs[-1]
+        room_ = l_breadth[node] - 12.0
+        if span > room_ > 0:
+            offs = [o * room_ / span for o in offs]
+            span = room_
         top = cross[node] - l_breadth[node] / 2
+        side_chains[(node, side)] = [ci for _, _key, ci in ends]
         for i, (_, key, ci) in enumerate(ends):
             chain, (u, v, e, up, vp) = chains[ci]
             fixed = up if side == "out" else vp
             if fixed is not None:
                 port_cross[(ci, side)] = top + fixed
             else:
-                port_cross[(ci, side)] = cross[node] + (i - (k - 1) / 2) * spacing
+                port_cross[(ci, side)] = cross[node] + offs[i] - span / 2
 
     # remove tiny jogs: if an auto port is within a few px of where its hop
     # comes from, slide the port so the run is perfectly straight
@@ -477,6 +506,50 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -
         node = chain[h + 1]
         return port_cross[(ci, "in")] if h + 1 == len(chain) - 1 else cross[node]
 
+    # Where one edge leaves rank r on the same line (within edge_sep) as another
+    # edge enters rank r + 1, the two stubs are collinear and read as a single
+    # line (or overlap). Slide an auto port off that line.
+    hops_in_gap: dict[int, list[tuple[int, int]]] = {}
+    for a, b, ci, h in segments:
+        hops_in_gap.setdefault(l_rank[a], []).append((ci, h))
+
+    def slide_port(ci: int, h: int, which: str, r: int, avoid: float) -> bool:
+        chain, (u, v, e, up, vp) = chains[ci]
+        if which == "a" and h == 0 and up is None:
+            node, side = u, "out"
+        elif which == "b" and h == len(chain) - 2 and vp is None:
+            node, side = v, "in"
+        else:
+            return False
+        cur = port_cross[(ci, side)]
+        far_end = end_cross(ci, h, "b" if which == "a" else "a")
+        facing = "b" if which == "a" else "a"
+        for c in sorted((avoid - p.edge_sep, avoid + p.edge_sep), key=lambda c: (abs(c - far_end), abs(c - cur))):
+            if not fits(node, c):
+                continue
+            # keep port order on the side (no new crossings) and the spacing
+            if any(abs(c - port_cross[(cj, side)]) < p.edge_sep or (c - port_cross[(cj, side)]) * (cur - port_cross[(cj, side)]) < 0
+                   for cj in side_chains[(node, side)] if cj != ci):
+                continue
+            if any(abs(c - end_cross(cj, hj, facing)) < p.edge_sep for cj, hj in hops_in_gap[r] if cj != ci):
+                continue
+            port_cross[(ci, side)] = c
+            return True
+        return False
+
+    for _ in range(3):
+        moved = False
+        for r in sorted(hops_in_gap):
+            for ci, h in hops_in_gap[r]:
+                for cj, hj in hops_in_gap[r]:
+                    if ci == cj:
+                        continue
+                    ca, cb = end_cross(ci, h, "a"), end_cross(cj, hj, "b")
+                    if abs(ca - cb) < p.edge_sep and (slide_port(ci, h, "a", r, cb) or slide_port(cj, hj, "b", r, ca)):
+                        moved = True
+        if not moved:
+            break
+
     # ------------------------------------------------- 8. channels + labels
     gap_hops: dict[int, list[tuple[int, int, float, float]]] = {r: [] for r in range(max(nranks - 1, 0))}
     for a, b, ci, h in segments:
@@ -494,7 +567,7 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -
         for ci, h, ca, cb in downs + ups:
             lo, hi = min(ca, cb), max(ca, cb)
             for s, occ in enumerate(slots):
-                if all(hi + 6 < o_lo or lo - 6 > o_hi for o_lo, o_hi in occ):
+                if all(hi + p.edge_sep <= o_lo or lo - p.edge_sep >= o_hi for o_lo, o_hi in occ):
                     occ.append((lo, hi))
                     channel_of[(ci, h)] = s
                     break
@@ -549,25 +622,53 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -
         for v in range(n):
             depth[v] = rank_depth[rank[v]]
 
-    gap_size = []
-    gap_layout = []  # (channel band start offset, label zone start offset) from gap start
-    for r in range(max(nranks - 1, 0)):
+    ngaps = max(nranks - 1, 0)
+    band_ws, used_ws, inners = [], [], []
+    for r in range(ngaps):
         k = nchannels[r]
         band_w = (k - 1) * p.channel_spacing if k else 0.0
         rows = gap_rows[r]
         zone = sum(rows) + 4 * max(len(rows) - 1, 0)
-        inner = p.stub_out + band_w + (p.label_margin * 2 + zone if rows else 0.0) + p.stub_in
-        inner = max(inner, p.gap_min)
-        lead = p.lane_pad if end_pad[r] else 0.0
-        trail = (p.lane_pad + head_main) if start_pad[r] else 0.0
+        used = p.stub_out + band_w + (p.label_margin * 2 + zone if rows else 0.0) + p.stub_in
+        inner = max(used, p.gap_min)
         if end_pad[r] and start_pad[r]:
             inner = max(inner, p.lane_gap)
+        band_ws.append(band_w)
+        used_ws.append(used)
+        inners.append(inner)
+
+    # LR: a lane is as long as its ranks. When it needs more (its label), its
+    # box reaches equally far before and after its nodes, into the gaps.
+    lane_ext: dict[str, float] = {}
+    if lr:
+        base_gap = [inners[r] + (p.lane_pad if end_pad[r] else 0.0) + ((p.lane_pad + head_main) if start_pad[r] else 0.0)
+                    for r in range(ngaps)]
+        for lid in lane_track:
+            lo, hi = (0, nranks - 1) if lane_full[lid] else lane_span[lid]
+            length = sum(rank_depth[lo:hi + 1]) + sum(base_gap[lo:hi]) + 2 * pad + head_main
+            if lane_min_w.get(lid, 0.0) > length:
+                lane_ext[lid] = float(math.ceil((lane_min_w[lid] - length) / 2))
+    ext_end = [0.0] * ngaps  # extra room after rank r for lanes ending there
+    ext_start = [0.0] * ngaps  # extra room before rank r + 1 for lanes starting there
+    for lid, x in lane_ext.items():
+        if lane_full[lid]:
+            continue
+        lo, hi = lane_span[lid]
+        if hi < nranks - 1:
+            ext_end[hi] = max(ext_end[hi], x)
+        if lo > 0:
+            ext_start[lo - 1] = max(ext_start[lo - 1], x)
+
+    gap_size = []
+    gap_layout = []  # (channel band start offset, label zone start offset) from gap start
+    for r in range(ngaps):
+        lead = (p.lane_pad + ext_end[r]) if end_pad[r] else 0.0
+        trail = (p.lane_pad + head_main + ext_start[r]) if start_pad[r] else 0.0
         # centre the channel band + labels in the free space
-        used = p.stub_out + band_w + (p.label_margin * 2 + zone if rows else 0.0) + p.stub_in
-        slack = (inner - used) / 2
+        slack = (inners[r] - used_ws[r]) / 2
         band_start = lead + slack + p.stub_out
-        zone_start = band_start + band_w + p.label_margin
-        gap_size.append(lead + inner + trail)
+        zone_start = band_start + band_ws[r] + p.label_margin
+        gap_size.append(lead + inners[r] + trail)
         gap_layout.append((band_start, zone_start))
 
     lead_main = (pad + head_main) if has_lanes else 0.0
@@ -637,17 +738,21 @@ def layout(boxes: list[LBox], edges: list[LEdge], lanes: list[str], p: Params) -
 
     lane_rects: list[LaneRect] = []
     if has_lanes:
-        full_lo = rank_start[0] - pad - head_main
-        full_hi = rank_end[-1] + pad
+        lane_main: dict[str, tuple[float, float]] = {}
+        for lid in lane_track:
+            if not lane_full[lid]:
+                lo, hi = lane_span[lid]
+                x = lane_ext.get(lid, 0.0)
+                lane_main[lid] = (rank_start[lo] - pad - head_main - x, rank_end[hi] + pad + x)
+        # full-length lanes reach as far as any extended lane, plus their own extension
+        full_x = max((x for lid, x in lane_ext.items() if lane_full[lid]), default=0.0)
+        full_lo = min([rank_start[0] - pad - head_main] + [s[0] for s in lane_main.values()]) - full_x
+        full_hi = max([rank_end[-1] + pad] + [s[1] for s in lane_main.values()]) + full_x
         for lid in lanes:
             if lid not in lane_track:
                 continue
             t = lane_track[lid]
-            lo, hi = lane_span[lid]
-            if lane_full[lid]:
-                m0, m1 = full_lo, full_hi
-            else:
-                m0, m1 = rank_start[lo] - pad - head_main, rank_end[hi] + pad
+            m0, m1 = (full_lo, full_hi) if lane_full[lid] else lane_main[lid]
             c0, c1 = band[t]
             x0, y0 = to_xy(m0, c0)
             x1, y1 = to_xy(m1, c1)

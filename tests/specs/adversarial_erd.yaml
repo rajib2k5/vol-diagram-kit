@@ -1,0 +1,32 @@
+# Every printable ASCII punctuation mark, plus the characters that broke
+# Mermaid / draw.io in review, in every place an ERD puts user text.
+kind: erd
+title: 'ERD labels: P&L "q" #1; 50% a\b (x) &amp;'
+subtitle: 'subtitle <sub> & "more"'
+entities:
+  - id: contract
+    label: 'contract <id> & "q"'
+    columns:
+      - {name: contract_id, type: bigint, pk: true}
+      - {name: strikes, type: 'numeric(12-4)[]', nullable: true}
+  - id: fill
+    label: '50% fill a\b #1; (x) [y] {z}'
+    columns:
+      - {name: fill_id, type: bigint, pk: true}
+      - {name: contract_id, type: bigint, fk: contract.contract_id}
+  - id: leg
+    label: 'all !"#$%&''()*+,-./:;<=>?@[\]^_`{|}~'
+    columns:
+      - {name: leg_id, type: bigint, pk: true}
+      - {name: fill_id, type: bigint, fk: fill.fill_id}
+      - {name: contract_id, type: bigint, fk: contract.contract_id, nullable: true}
+  - id: quote
+    label: 'σ² → vol: style:#1; z |p| &amp; `md`'
+    columns:
+      - {name: quote_id, type: bigint, pk: true}
+      - {name: leg_id, type: bigint, fk: leg.leg_id}
+relations:
+  - {from: fill.contract_id, to: contract.contract_id, label: '<id> & &amp; "q"'}
+  - {from: leg.fill_id, to: fill.fill_id, cardinality: "1..*", label: 'all !"#$%&''()*+,-./:;<=>?@[\]^_`{|}~'}
+  - {from: leg.contract_id, to: contract.contract_id, label: 'σ² → 50% a\b #1; |p| (x)'}
+  - {from: quote.leg_id, to: leg.leg_id, cardinality: "0..1", label: '`md` wrap: me #quot;'}

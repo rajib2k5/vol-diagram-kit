@@ -6,8 +6,11 @@ import itertools
 
 import pytest
 
+import dataclasses
+
 from diagram_kit import erd, flow, sequence
 from diagram_kit.spec import ErdSpec, FlowSpec, SequenceSpec
+from diagram_kit.textmetrics import text_width
 
 from .conftest import spec_from
 from .geometry import (
@@ -20,7 +23,10 @@ from .geometry import (
     rects_overlap,
     shared_run,
     shrink,
+    too_close,
 )
+
+EDGE_SEP = 12.0  # distinct edges must not run closer than this side by side or end to end
 
 # Extra shapes the examples do not cover: TB, overlapping lanes (stacked tracks),
 # no lanes, long edges, a 3-cycle, fan-in with labels.
@@ -78,6 +84,42 @@ EXTRA_FLOWS = {
           - {from: y, to: z}
           - {from: z, to: x, label: back, style: control}
         """,
+    # lane labels longer than their lanes' cards: one rank, two ranks, the last rank
+    "long_lane_labels": """
+        kind: flow
+        title: Long lane labels
+        lanes:
+          - {id: a, label: Market and reference data acquisition from vendors}
+          - {id: b, label: Two ranks with a label longer than both of its cards together}
+          - {id: c, label: Delivery to the research dashboard and the nightly report}
+        nodes:
+          - {id: s, label: S, type: source, lane: a}
+          - {id: p, label: P, type: process, lane: b}
+          - {id: q, label: Q, type: process, lane: b}
+          - {id: o, label: O, type: output, lane: c}
+        edges:
+          - {from: s, to: p, label: raw}
+          - {from: p, to: q}
+          - {from: q, to: o, label: publish}
+        """,
+    # TB: stacked stage lanes share a band; overlapping actor lanes get their own
+    "long_lane_labels_tb": """
+        kind: flow
+        title: Long lane labels TB
+        direction: TB
+        lanes:
+          - {id: trader, label: Trader desk including the overnight risk reviewers}
+          - {id: system, label: Sys}
+        nodes:
+          - {id: idea, label: Idea, type: ui, lane: trader}
+          - {id: spec, label: Spec, type: process, lane: system}
+          - {id: review, label: Review, type: ui, lane: trader}
+          - {id: run, label: Run, type: process, lane: system}
+        edges:
+          - {from: idea, to: spec, label: draft}
+          - {from: spec, to: review}
+          - {from: review, to: run, label: approve}
+        """,
 }
 
 
@@ -122,7 +164,14 @@ def flow_problems(sc: flow.FlowScene) -> list[str]:
     for ga, gb in itertools.combinations(sc.edges, 2):
         if shared_run(ga.points, gb.points):
             probs.append(f"edges {ga.index} and {gb.index} run on top of each other")
+        elif too_close(ga.points, gb.points, EDGE_SEP):
+            probs.append(f"edges {ga.index} and {gb.index} run closer than {EDGE_SEP:g} px")
     lanes = {g.lane.id: (g.x, g.y, g.w, g.h) for g in sc.lanes}
+    for g in sc.lanes:
+        # SVG: upper-cased, bold 11 px, 0.8 letter-spacing, 16 px in from the left edge
+        ink_right = g.x + 16 + text_width(g.lane.label.upper(), 11, True, 0.8)
+        if ink_right > g.x + g.w - 8:
+            probs.append(f"lane {g.lane.id} label overflows by {ink_right - (g.x + g.w - 8):.1f} px")
     for g in sc.nodes:
         if g.node.lane and not contains(lanes[g.node.lane], cards[g.node.id]):
             probs.append(f"card {g.node.id} sticks out of lane {g.node.lane}")
@@ -226,8 +275,8 @@ def test_extra_flows_are_clean(name):
     assert flow_problems(flow.build_scene(spec)) == []
 
 
-def test_examples_are_clean(example_specs):
-    for spec in example_specs:
+def test_examples_and_test_specs_are_clean(all_specs):
+    for spec in all_specs:
         if isinstance(spec, FlowSpec):
             assert flow_problems(flow.build_scene(spec)) == [], spec.name
         elif isinstance(spec, ErdSpec):
@@ -267,12 +316,67 @@ def test_back_edge_arrow_points_at_original_target():
 
 def test_pipeline_stage_lanes_share_one_row_and_actor_lanes_stack():
     pipe = next(s for s in _examples() if s.name == "iv_forecast_pipeline")
-    sc = flow.build_scene(pipe)
+    sc = flow.build_scene(dataclasses.replace(pipe, direction="LR"))
     tops = {round(g.y) for g in sc.lanes}
-    assert len(tops) == 1, "disjoint stage lanes should sit side by side"
+    assert len(tops) == 1, "LR: disjoint stage lanes should sit side by side"
+    sc = flow.build_scene(dataclasses.replace(pipe, direction="TB"))
+    lefts = {round(g.x) for g in sc.lanes}
+    assert len(lefts) == 1, "TB: disjoint stage lanes should stack in one column"
     sc2 = flow.build_scene(spec_from(EXTRA_FLOWS["tb_swimlanes"], name="tb"))
     lefts = sorted(g.x for g in sc2.lanes)
     assert lefts[0] + sc2.lanes[0].w <= lefts[1] or lefts[1] + sc2.lanes[1].w <= lefts[0]
+
+
+def _stress(direction: str) -> FlowSpec:
+    from diagram_kit.spec import load_spec
+
+    from .conftest import TEST_SPECS
+
+    return dataclasses.replace(load_spec(TEST_SPECS / "flow_stress.yaml"), direction=direction)
+
+
+@pytest.mark.parametrize("direction", ["LR", "TB"])
+def test_stress_flow_is_clean(direction):
+    """15 nodes / 4 lanes: no overlaps, lane labels fit, no two edges closer than EDGE_SEP."""
+    assert flow_problems(flow.build_scene(_stress(direction))) == []
+
+
+def test_review_case_lstm_and_retrain_edges_are_apart():
+    """The review found LSTM->Ensemble and the retrain trigger collinear 4 px apart (LR)."""
+    sc = flow.build_scene(_stress("LR"))
+    by_pair = {(g.edge.src, g.edge.dst): g for g in sc.edges}
+    assert not too_close(by_pair[("lstm", "ens")].points, by_pair[("evalx", "feat")].points, EDGE_SEP)
+
+
+def test_hops_closer_than_edge_sep_get_separate_channels():
+    """Two hops in one gap whose cross ranges are 8 px apart must not share a vertical channel.
+
+    Fixed ports (as for ERD rows) cannot be slid apart, so only the channel
+    assignment can keep them EDGE_SEP apart. Edge 0 runs 20 -> 60 and edge 1
+    68 -> 108 (8 px between 60 and 68); edges 2 and 3 pull the other way so the
+    placement leaves both boxes level and the two hops exactly as written.
+    """
+    from diagram_kit.layered import LBox, LEdge, Params, layout
+
+    res = layout([LBox("p", 120, 280), LBox("q", 120, 280)],
+                 [LEdge(0, "p", "q", src_port=20, dst_port=60), LEdge(1, "p", "q", src_port=68, dst_port=108),
+                  LEdge(2, "p", "q", src_port=240, dst_port=200), LEdge(3, "p", "q", src_port=260, dst_port=220)],
+                 [], Params(direction="LR"))
+    a, b = res.edges[0], res.edges[1]
+    top = res.boxes["p"].y
+    assert res.boxes["q"].y == top
+    assert {y - top for _, y in a.points} == {20, 60} and {y - top for _, y in b.points} == {68, 108}
+    assert not too_close(a.points, b.points, EDGE_SEP)
+
+
+def test_wide_flows_fit_a_readme_in_tb():
+    """README target: at most 1800 px wide. TB width follows the widest rank, not the number of ranks."""
+    pipe = next(s for s in _examples() if s.name == "iv_forecast_pipeline")
+    assert pipe.direction == "TB"
+    for spec in (pipe, _stress("TB")):
+        sc = flow.build_scene(spec)
+        assert sc.width <= 1800, (spec.name, sc.width)
+        assert flow_problems(sc) == [], spec.name
 
 
 def test_tb_flows_downward():

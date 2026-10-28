@@ -32,6 +32,18 @@ MERMAID_RESERVED = {
     "loop", "alt", "else", "opt", "par", "and", "note", "rect", "critical", "break",
     "autonumber", "activate", "deactivate", "title", "box", "create", "destroy",
 }
+# Extra words that fail only in one diagram type, measured by parsing a probe
+# file per word with Mermaid 12.2.0 (GitHub) and 11.17.2 (mermaid-cli).
+RESERVED_IN = {
+    "flowchart": {"interpolate", "_self", "_blank", "_parent", "_top"},
+    "erDiagram": {"one", "many", "to", "erdiagram", "acctitle", "accdescr"},
+    "sequenceDiagram": {"over", "option", "par_over", "off", "sequencediagram", "acctitle", "accdescr",
+                        "link", "links", "properties", "details"},
+}
+# erDiagram lexes these as key markers anywhere inside an entity's attribute block.
+ERD_ATTRIBUTE_KEYS = {"pk", "fk", "uk"}
+# Mermaid drops '<x...' from diagram titles as an HTML tag and prints any other '<' as '&lt;'.
+TITLE_BAD_CHARS = "<"
 MAX_BLOCK_DEPTH = 4
 
 
@@ -207,9 +219,22 @@ _UniqueKeyLoader.add_constructor(
 )
 
 
-def _suggest(name: str, choices) -> str:
+def _closest(name: Any, choices) -> str | None:
     match = difflib.get_close_matches(str(name), [str(c) for c in choices], n=1, cutoff=0.6)
-    return f" (did you mean {match[0]!r}?)" if match else ""
+    return match[0] if match else None
+
+
+def _suggest(name: str, choices) -> str:
+    match = _closest(name, choices)
+    return f" (did you mean {match!r}?)" if match else ""
+
+
+def _among(val: Any, known: set) -> bool:
+    """``val in known`` that tolerates unhashable YAML values (lists, mappings)."""
+    try:
+        return val in known
+    except TypeError:
+        return False
 
 
 class _V:
@@ -252,7 +277,7 @@ class _V:
             return None
         return val
 
-    def ident(self, obj: dict, key: str, path: str, what: str) -> str | None:
+    def ident(self, obj: dict, key: str, path: str, what: str, diagram: str) -> str | None:
         where = f"{path}.{key}" if path else key
         if key not in obj or obj[key] is None:
             self.err(where, "is required")
@@ -265,10 +290,18 @@ class _V:
         if not ID_RE.match(val):
             self.err(where, f"{what} id {val!r} must match [A-Za-z_][A-Za-z0-9_]*")
             return None
-        if val.lower() in MERMAID_RESERVED:
-            self.err(where, f"{what} id {val!r} is a Mermaid keyword; pick another id")
+        if val.lower() in MERMAID_RESERVED or val.lower() in RESERVED_IN[diagram]:
+            self.err(where, f"{what} id {val!r} is a Mermaid {diagram} keyword; pick another id, e.g. {val + '_id'!r}")
             return None
         return val
+
+    def title(self, obj: dict) -> str:
+        title = self.text(obj, "title", "")
+        if title is not None and any(c in title for c in TITLE_BAD_CHARS):
+            self.err("title", "Mermaid cannot show '<' in a diagram title (it drops '<word>' as an HTML tag "
+                              "and prints any other '<' as '&lt;'); use e.g. '(daily)' or '≤' instead")
+            return ""
+        return title or ""
 
     def boolean(self, obj: dict, key: str, path: str, default: bool) -> bool:
         if key not in obj or obj[key] is None:
@@ -351,63 +384,87 @@ def parse_spec(text: str, name: str, source: str = "<spec>") -> Spec:
 
 def _flow(data: dict, name: str, v: _V) -> FlowSpec:
     v.keys(data, ("kind", "title", "subtitle", "direction", "lanes", "nodes", "edges", "legend"), "")
-    title = v.text(data, "title", "") or ""
+    title = v.title(data)
     subtitle = v.text(data, "subtitle", "", required=False)
     direction = v.choice(data, "direction", "", DIRECTIONS, "LR")
     legend = v.boolean(data, "legend", "", True)
 
+    # Ids that were declared but rejected are remembered, so references to
+    # them are not reported a second time as "unknown".
     lanes: list[Lane] = []
     lane_ids: set[str] = set()
+    bad_lane_ids: set = set()
     for i, raw in enumerate(v.items(data, "lanes", "", required=False)):
         p = f"lanes[{i}]"
         if not v.mapping(raw, p):
             continue
         v.keys(raw, ("id", "label"), p)
-        lid = v.ident(raw, "id", p, "lane")
+        lid = v.ident(raw, "id", p, "lane", "flowchart")
         label = v.text(raw, "label", p)
-        if lid is None or label is None:
+        if lid is None:
+            if not isinstance(raw.get("id"), (list, dict)):
+                bad_lane_ids.add(raw.get("id"))
             continue
         if lid in lane_ids:
             v.err(f"{p}.id", f"duplicate lane id {lid!r}")
             continue
         lane_ids.add(lid)
+        if label is None:
+            continue
         lanes.append(Lane(lid, label))
 
     nodes: list[Node] = []
     node_ids: set[str] = set()
+    bad_node_ids: set = set()
+    used_lanes: set[str] = set()
+    lane_ref_unresolved = False
     for i, raw in enumerate(v.items(data, "nodes", "", required=True)):
         p = f"nodes[{i}]"
         if not v.mapping(raw, p):
             continue
         v.keys(raw, ("id", "label", "sublabel", "type", "lane"), p)
-        nid = v.ident(raw, "id", p, "node")
+        nid = v.ident(raw, "id", p, "node", "flowchart")
         label = v.text(raw, "label", p)
         sub = v.text(raw, "sublabel", p, required=False)
         ntype = v.choice(raw, "type", p, NODE_TYPES, None)
         lane = raw.get("lane")
         if lane is not None:
-            if not isinstance(lane, str) or lane not in lane_ids:
+            if isinstance(lane, str) and lane in lane_ids:
+                used_lanes.add(lane)  # counted even if this node is otherwise invalid
+            elif _among(lane, bad_lane_ids):
+                lane = None  # the lane's own error is already reported
+            else:
                 v.err(f"{p}.lane", f"unknown lane {lane!r}{_suggest(lane, sorted(lane_ids))}")
+                guess = _closest(lane, sorted(lane_ids))
+                if guess is not None:
+                    used_lanes.add(guess)
+                else:
+                    lane_ref_unresolved = True
                 lane = None
         elif lanes:
             v.err(f"{p}.lane", "is required because the spec declares lanes")
         if nid is None:
+            if not isinstance(raw.get("id"), (list, dict)):
+                bad_node_ids.add(raw.get("id"))
             continue
         if nid in node_ids:
             v.err(f"{p}.id", f"duplicate node id {nid!r}")
             continue
         if nid in lane_ids:
             v.err(f"{p}.id", f"node id {nid!r} collides with a lane id")
+            bad_node_ids.add(nid)
             continue
         node_ids.add(nid)  # registered even if other fields are bad, so edges don't cascade
         if label is None or ntype is None:
             continue
         nodes.append(Node(nid, label, sub, ntype, lane))
 
-    used_lanes = {n.lane for n in nodes}
-    for i, lane in enumerate(lanes):
-        if lane.id not in used_lanes:
-            v.err(f"lanes[{i}]", f"lane {lane.id!r} has no nodes")
+    # A node whose lane is a typo may have been meant for any lane; only
+    # report empty lanes when every lane reference resolved.
+    if not lane_ref_unresolved:
+        for i, lane in enumerate(lanes):
+            if lane.id not in used_lanes:
+                v.err(f"lanes[{i}]", f"lane {lane.id!r} has no nodes")
 
     edges: list[Edge] = []
     seen_pairs: set[tuple[str, str, str | None]] = set()
@@ -422,6 +479,8 @@ def _flow(data: dict, name: str, v: _V) -> FlowSpec:
             if val is None:
                 v.err(f"{p}.{key}", "is required")
                 ends.append(None)
+            elif _among(val, bad_node_ids) and not _among(val, node_ids):
+                ends.append(None)  # the node's own error is already reported
             elif not isinstance(val, str) or val not in node_ids:
                 v.err(f"{p}.{key}", f"unknown node {val!r}{_suggest(val, sorted(node_ids))}")
                 ends.append(None)
@@ -459,22 +518,27 @@ def _split_ref(val: Any) -> tuple[str, str] | None:
 
 def _erd(data: dict, name: str, v: _V) -> ErdSpec:
     v.keys(data, ("kind", "title", "subtitle", "entities", "relations", "legend"), "")
-    title = v.text(data, "title", "") or ""
+    title = v.title(data)
     subtitle = v.text(data, "subtitle", "", required=False)
     legend = v.boolean(data, "legend", "", True)
 
     entities: list[Entity] = []
     by_id: dict[str, Entity] = {}
+    # Rejected entity ids and rejected columns are remembered so that fk /
+    # relation references to them do not add "unknown ..." errors on top.
+    bad_entity_ids: set = set()
+    bad_cols: dict[str, set[str]] = {}
     raw_fks: list[tuple[str, str, str, Any]] = []  # (path, entity, column, raw fk)
     for i, raw in enumerate(v.items(data, "entities", "", required=True)):
         p = f"entities[{i}]"
         if not v.mapping(raw, p):
             continue
         v.keys(raw, ("id", "label", "columns"), p)
-        eid = v.ident(raw, "id", p, "entity")
+        eid = v.ident(raw, "id", p, "entity", "erDiagram")
         label = v.text(raw, "label", p, required=False) if "label" in raw else eid
         cols: list[Column] = []
         col_names: set[str] = set()
+        rejected: set[str] = set()
         for j, rc in enumerate(v.items(raw, "columns", p, required=True)):
             cp = f"{p}.columns[{j}]"
             if not v.mapping(rc, cp):
@@ -483,6 +547,13 @@ def _erd(data: dict, name: str, v: _V) -> ErdSpec:
             cname = rc.get("name")
             if not isinstance(cname, str) or not ID_RE.match(cname):
                 v.err(f"{cp}.name", f"column name {cname!r} must match [A-Za-z_][A-Za-z0-9_]*")
+                if isinstance(cname, str):
+                    rejected.add(cname)
+                continue
+            if cname.lower() in ERD_ATTRIBUTE_KEYS:
+                v.err(f"{cp}.name", f"column name {cname!r} is a Mermaid erDiagram key marker (PK/FK/UK in any case); "
+                                    f"rename it, e.g. {cname + '_id'!r}")
+                rejected.add(cname)
                 continue
             ctype = rc.get("type")
             if not isinstance(ctype, str) or not COLUMN_TYPE_RE.match(ctype):
@@ -491,6 +562,11 @@ def _erd(data: dict, name: str, v: _V) -> ErdSpec:
                     f"column type {ctype!r} must match [A-Za-z_][A-Za-z0-9_-[]()]* "
                     "(Mermaid erDiagram limit; e.g. numeric, timestamptz, numeric(12-4))",
                 )
+                rejected.add(cname)
+                continue
+            if ctype.lower() in ERD_ATTRIBUTE_KEYS:
+                v.err(f"{cp}.type", f"column type {ctype!r} is a Mermaid erDiagram key marker (PK/FK/UK in any case)")
+                rejected.add(cname)
                 continue
             pk = v.boolean(rc, "pk", cp, False)
             nullable = v.boolean(rc, "nullable", cp, False)
@@ -504,12 +580,15 @@ def _erd(data: dict, name: str, v: _V) -> ErdSpec:
                 raw_fks.append((f"{cp}.fk", eid or "", cname, rc.get("fk")))
             cols.append(Column(cname, ctype, pk, None, nullable))
         if eid is None:
+            if not isinstance(raw.get("id"), (list, dict)):
+                bad_entity_ids.add(raw.get("id"))
             continue
         if eid in by_id:
             v.err(f"{p}.id", f"duplicate entity id {eid!r}")
             continue
         ent = Entity(eid, label or eid, tuple(cols))
         by_id[eid] = ent
+        bad_cols[eid] = rejected - col_names
         entities.append(ent)
 
     def resolve(path: str, val: Any) -> tuple[str, str] | None:
@@ -519,11 +598,13 @@ def _erd(data: dict, name: str, v: _V) -> ErdSpec:
             return None
         ent, col = ref
         if ent not in by_id:
-            v.err(path, f"unknown entity {ent!r}{_suggest(ent, sorted(by_id))}")
+            if not _among(ent, bad_entity_ids):  # else the entity's own error is already reported
+                v.err(path, f"unknown entity {ent!r}{_suggest(ent, sorted(by_id))}")
             return None
         names = [c.name for c in by_id[ent].columns]
         if col not in names:
-            v.err(path, f"entity {ent!r} has no column {col!r}{_suggest(col, names)}")
+            if col not in bad_cols[ent]:  # else the column's own error is already reported
+                v.err(path, f"entity {ent!r} has no column {col!r}{_suggest(col, names)}")
             return None
         return ent, col
 
@@ -593,20 +674,23 @@ def _erd(data: dict, name: str, v: _V) -> ErdSpec:
 
 def _sequence(data: dict, name: str, v: _V) -> SequenceSpec:
     v.keys(data, ("kind", "title", "subtitle", "participants", "messages", "autonumber"), "")
-    title = v.text(data, "title", "") or ""
+    title = v.title(data)
     subtitle = v.text(data, "subtitle", "", required=False)
     autonumber = v.boolean(data, "autonumber", "", False)
     participants: list[Participant] = []
     ids: set[str] = set()
+    bad_ids: set = set()  # rejected participant ids; messages naming them are not re-reported
     for i, raw in enumerate(v.items(data, "participants", "", required=True)):
         p = f"participants[{i}]"
         if not v.mapping(raw, p):
             continue
         v.keys(raw, ("id", "label", "type"), p)
-        pid = v.ident(raw, "id", p, "participant")
+        pid = v.ident(raw, "id", p, "participant", "sequenceDiagram")
         label = v.text(raw, "label", p, required=False) if "label" in raw else pid
         ptype = v.choice(raw, "type", p, NODE_TYPES, "") if "type" in raw else None
         if pid is None:
+            if not isinstance(raw.get("id"), (list, dict)):
+                bad_ids.add(raw.get("id"))
             continue
         if pid in ids:
             v.err(f"{p}.id", f"duplicate participant id {pid!r}")
@@ -663,7 +747,9 @@ def _sequence(data: dict, name: str, v: _V) -> SequenceSpec:
             ends = []
             for key in ("from", "to"):
                 val = raw.get(key)
-                if not isinstance(val, str) or val not in ids:
+                if val is not None and _among(val, bad_ids) and not _among(val, ids):
+                    ends.append(None)  # the participant's own error is already reported
+                elif not isinstance(val, str) or val not in ids:
                     v.err(f"{p}.{key}", f"unknown participant {val!r}{_suggest(val, sorted(ids))}")
                     ends.append(None)
                 else:

@@ -1,0 +1,17 @@
+# Ids next to Mermaid keywords that validation accepts (including the '<id>_id'
+# rename its error messages suggest) must still parse.
+kind: erd
+title: Near-keyword ids
+entities:
+  - id: one_id
+    columns:
+      - {name: pk_id, type: bigint, pk: true}
+      - {name: uk_x, type: pkx}
+  - id: only
+    columns:
+      - {name: fk_id, type: bigint, pk: true}
+      - {name: one_id, type: bigint, fk: one_id.pk_id}
+  - id: zero
+    columns:
+      - {name: u, type: int-pk, pk: true}
+      - {name: only_fk, type: bigint, fk: only.fk_id, nullable: true}

@@ -1,0 +1,20 @@
+# Every printable ASCII punctuation mark, plus the characters that broke
+# Mermaid in review, in every place a sequence diagram puts user text.
+kind: sequence
+title: 'Sequence labels: P&L "q" #1; 50% a\b (x) &amp;'
+autonumber: true
+participants:
+  - {id: eng, label: 'Engine <core> & "co" #1; (x)', type: process}
+  - {id: db, label: 'DB 50% a\b [pg] {v} |p|'}
+messages:
+  - {from: eng, to: db, label: 'all !"#$%&''()*+,-./:;<=>?@[\]^_`{|}~', note: '<id> & &amp; "q"'}
+  - loop: 'wrap: each day; #1 (x)'
+    messages:
+      - {from: db, to: eng, label: 'nowrap: σ² → vol', kind: return}
+      - alt:
+          - when: 'style:#1; z'
+            messages: [{from: eng, to: db, label: 'f(x) [y] {z} `md`', kind: async}]
+          - when: '50% a\b |p|'
+            messages: [{from: eng, to: eng, label: '<id> self & "q"'}]
+  - opt: '#quot; raw #35; </b>'
+    messages: [{from: db, to: eng, label: 'done: ok', kind: return}]

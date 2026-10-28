@@ -1,0 +1,20 @@
+# Ids next to Mermaid keywords that validation accepts (including the '<id>_id'
+# rename its error messages suggest) must still parse.
+kind: flow
+title: Near-keyword ids
+lanes:
+  - {id: end_id, label: End lane}
+  - {id: default_id, label: Default lane}
+nodes:
+  - {id: x, label: x, type: source, lane: end_id}
+  - {id: o, label: o, type: process, lane: end_id}
+  - {id: interpolate_id, label: interpolate, type: model, lane: end_id}
+  - {id: one, label: one, type: store, lane: default_id}
+  - {id: over, label: over, type: output, lane: default_id}
+  - {id: _self_id, label: _self, type: ui, lane: default_id}
+edges:
+  - {from: x, to: o}
+  - {from: o, to: interpolate_id, label: to}
+  - {from: interpolate_id, to: one}
+  - {from: one, to: over, style: dashed}
+  - {from: over, to: _self_id, style: control}

@@ -23,8 +23,20 @@ PARENT_TEXT = {"one": "1", "zero_or_one": "0..1"}
 
 
 def _x(s: str) -> str:
+    """Escape for an XML attribute, and equally for text inside an ``html=1`` label."""
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;").replace("\n", "&#10;"))
+
+
+def _label(s: str, lucid: bool) -> str:
+    """Cell value for plain text ``s``: html=1 cells (draw.io flavour) parse it as HTML, so escape it."""
+    return s if lucid else _x(s)
+
+
+def _row_id(entity: str, column: str) -> str:
+    # '-' cannot occur in an entity or column id, so the id is unambiguous
+    # (with '_', column 'option' + suffix '_type' collided with column 'option_type').
+    return f"row-{entity}-{column}"
 
 
 def _rel(v: float) -> str:
@@ -118,10 +130,10 @@ def _titles(doc: _Doc, sc, lucid: bool) -> None:
     tb = sc.title
     base = ("rounded=0;fillColor=none;strokeColor=none;html=0;" if lucid else "text;html=1;") + \
         f"align=left;verticalAlign=top;fontFamily={theme.DRAWIO_FONT};"
-    doc.vertex("title", tb.title, base + f"fontSize=20;fontStyle=1;fontColor={theme.TEXT};",
+    doc.vertex("title", _label(tb.title, lucid), base + f"fontSize=20;fontStyle=1;fontColor={theme.TEXT};",
                "1", tb.x, tb.y - 22, max(tb.width, 200.0), 28)
     if tb.subtitle and tb.sub_y is not None:
-        doc.vertex("subtitle", tb.subtitle, base + f"fontSize=13;fontColor={theme.TEXT_MUTED};",
+        doc.vertex("subtitle", _label(tb.subtitle, lucid), base + f"fontSize=13;fontColor={theme.TEXT_MUTED};",
                    "1", tb.x, tb.sub_y - 15, max(tb.width, 200.0), 20)
 
 
@@ -149,7 +161,7 @@ def flow_drawio(sc: FlowScene, lucid: bool = False) -> str:
                             ("fontColor", theme.LANE_INK), ("fontStyle", 1), ("fontSize", 11),
                             ("fontFamily", theme.DRAWIO_FONT), ("align", "left"), ("spacingLeft", 14),
                             ("collapsible", 0), ("container", 1)])
-        doc.vertex(f"lane_{g.lane.id}", g.lane.label, style, "1", g.x, g.y, g.w, g.h)
+        doc.vertex(f"lane_{g.lane.id}", _label(g.lane.label, lucid), style, "1", g.x, g.y, g.w, g.h)
     for g in sc.nodes:
         n = g.node
         tok = theme.NODE_TYPES[n.type]
@@ -193,7 +205,7 @@ def flow_drawio(sc: FlowScene, lucid: bool = False) -> str:
         parts += [("exitX", _rel(ex)), ("exitY", _rel(ey)), ("exitDx", 0), ("exitDy", 0),
                   ("entryX", _rel(nx)), ("entryY", _rel(ny)), ("entryDx", 0), ("entryDy", 0)]
         lp = _label_position(g.points, g.label_center) if (e.label and g.label_center) else None
-        doc.edge(f"edge_{g.index}", e.label or "", _style(parts), f"node_{e.src}", f"node_{e.dst}",
+        doc.edge(f"edge_{g.index}", _label(e.label or "", lucid), _style(parts), f"node_{e.src}", f"node_{e.dst}",
                  g.points[1:-1], lp)
     return doc.render()
 
@@ -223,7 +235,7 @@ def erd_drawio(sc: ErdScene, lucid: bool = False) -> str:
                 ("fontFamily", theme.DRAWIO_FONT), ("align", "left"), ("spacingLeft", 12)]),
                 "1", g.x, g.y, g.w, HEADER_H)
             for i, c in enumerate(e.columns):
-                cid = f"row_{e.id}_{c.name}"
+                cid = _row_id(e.id, c.name)
                 keys = ",".join(key_badges(c))
                 value = (f"{keys}  " if keys else "") + f"{c.name} : {type_text(c)}"
                 ry = g.y + HEADER_H + i * ROW_H
@@ -235,7 +247,7 @@ def erd_drawio(sc: ErdScene, lucid: bool = False) -> str:
                 row_cell[(e.id, c.name)] = (cid, g.x, ry, g.w, ROW_H)
             continue
         tid = f"entity_{e.id}"
-        doc.vertex(tid, e.label, _style([
+        doc.vertex(tid, _x(e.label), _style([
             ("shape", "table"), ("startSize", HEADER_H), ("container", 1), ("collapsible", 0),
             ("childLayout", "tableLayout"), ("fixedRows", 1), ("rowLines", 1), ("fontStyle", 1), ("align", "left"),
             ("spacingLeft", 12), ("resizeLast", 1), ("html", 1), ("whiteSpace", "wrap"),
@@ -244,7 +256,7 @@ def erd_drawio(sc: ErdScene, lucid: bool = False) -> str:
             "1", g.x, g.y, g.w, g.h)
         key_w, name_w, type_w = _erd_columns(g)
         for i, c in enumerate(e.columns):
-            rid = f"row_{e.id}_{c.name}"
+            rid = _row_id(e.id, c.name)
             doc.vertex(rid, "", _style([
                 ("shape", "tableRow"), ("horizontal", 0), ("startSize", 0), ("swimlaneHead", 0),
                 ("swimlaneBody", 0), ("fillColor", theme.CARD_FILL), ("collapsible", 0), ("dropTarget", 0),
@@ -255,15 +267,15 @@ def erd_drawio(sc: ErdScene, lucid: bool = False) -> str:
                     ("left", 0), ("bottom", 0), ("right", 0), ("overflow", "hidden"), ("html", 1),
                     ("whiteSpace", "wrap"), ("fontFamily", theme.DRAWIO_FONT)]
             keys = ", ".join(key_badges(c))
-            doc.vertex(f"{rid}_key", keys, _style(cell + [("fontStyle", 1), ("fontSize", 9),
-                                                          ("fontColor", theme.PK_INK if c.pk else theme.FK_INK)]),
+            doc.vertex(f"{rid}-key", _x(keys), _style(cell + [("fontStyle", 1), ("fontSize", 9),
+                                                              ("fontColor", theme.PK_INK if c.pk else theme.FK_INK)]),
                        rid, 0, 0, key_w, ROW_H)
-            doc.vertex(f"{rid}_name", c.name, _style(cell + [("align", "left"), ("spacingLeft", 4),
-                                                             ("fontStyle", 1 if c.pk else 0), ("fontSize", 12),
-                                                             ("fontColor", theme.TEXT)]),
+            doc.vertex(f"{rid}-name", _x(c.name), _style(cell + [("align", "left"), ("spacingLeft", 4),
+                                                                 ("fontStyle", 1 if c.pk else 0), ("fontSize", 12),
+                                                                 ("fontColor", theme.TEXT)]),
                        rid, key_w, 0, name_w, ROW_H)
-            doc.vertex(f"{rid}_type", type_text(c), _style(cell + [("align", "right"), ("spacingRight", 14),
-                                                                   ("fontSize", 11), ("fontColor", theme.TEXT_MUTED)]),
+            doc.vertex(f"{rid}-type", _x(type_text(c)), _style(cell + [("align", "right"), ("spacingRight", 14),
+                                                                       ("fontSize", 11), ("fontColor", theme.TEXT_MUTED)]),
                        rid, key_w + name_w, 0, type_w, ROW_H)
             row_cell[(e.id, c.name)] = (rid, g.x, g.y + HEADER_H + i * ROW_H, g.w, ROW_H)
     for g in sc.relations:
@@ -284,7 +296,7 @@ def erd_drawio(sc: ErdScene, lucid: bool = False) -> str:
             parts += [("startArrow", ER_ARROWS[g.parent_marker]), ("endArrow", ER_ARROWS[g.child_marker]),
                       ("startFill", 0), ("endFill", 0), ("startSize", 10), ("endSize", 10),
                       ("labelBackgroundColor", theme.LABEL_FILL)]
-            value = r.label or ""
+            value = _x(r.label or "")
         parts += [("exitX", _rel(ex)), ("exitY", _rel(ey)), ("exitDx", 0), ("exitDy", 0),
                   ("entryX", _rel(nx)), ("entryY", _rel(ny)), ("entryDx", 0), ("entryDy", 0)]
         lp = _label_position(g.points, g.label_center) if (r.label and g.label_center) else None

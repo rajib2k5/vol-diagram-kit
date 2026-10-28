@@ -73,8 +73,19 @@ def test_only_builds_one_spec(tmp_path):
 def test_only_check_ignores_other_specs_outputs(built):
     specs, out = built
     (out / "iv_forecast_pipeline.svg").write_text("<svg/>")
+    (out / "deleted_spec.drawio").write_text("x")
     res = run(str(specs), "--out", str(out), "--check", "--only", "options_backtester_erd")
     assert res.returncode == 0, res.stderr
+
+
+def test_only_check_still_reports_that_specs_stale_files(built):
+    """A sequence spec has no .drawio: a leftover one is stale even under --only."""
+    specs, out = built
+    (out / "backtester_daily_loop.drawio").write_text("x")
+    res = run(str(specs), "--out", str(out), "--check", "--only", "backtester_daily_loop")
+    assert res.returncode == 1
+    assert f"stale    {out / 'backtester_daily_loop.drawio'}" in res.stderr
+    assert "diagrams out of date (1)" in res.stderr
 
 
 def test_no_png(tmp_path):

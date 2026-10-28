@@ -37,9 +37,9 @@ flowchart TB
     subgraph srv["Serve"]
         app("App")
     end
-    csv -->|load #124; parse| db
+    csv -->|"load | parse"| db
     db -.-> app
-    app ==>|refresh| csv
+    app ==>|"refresh"| csv
     classDef source fill:#E0F2FE,stroke:#0284C7,color:#0F172A
     class csv source
     classDef store fill:#FEF3C7,stroke:#D97706,color:#0F172A

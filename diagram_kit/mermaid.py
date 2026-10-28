@@ -32,9 +32,24 @@ def _escape(s: str, table: dict[str, str]) -> str:
     return "".join(table.get(ch, ch) for ch in s)
 
 
-_FLOW = {"#": "#35;", '"': "#quot;", "<": "#lt;", ">": "#gt;"}
-_EDGE = {**_FLOW, "|": "#124;"}
-_SEQ = {"#": "#35;", ";": "#59;"}
+# Mermaid replaces every ``#name;`` / ``#123;`` with an HTML entity before
+# parsing, so ``#`` itself must always be written as ``#35;``. Each table was
+# checked by parsing and rendering every printable ASCII punctuation mark plus
+# σ ² → in that context with Mermaid 12.2.0 (GitHub) and 11.17.2 (mermaid-cli)
+# and comparing the rendered text with the input (tests/test_mermaid_render.py).
+# Before parsing, Mermaid drops the last ';' of any line matching
+# 'style...:...#...;' (all diagram types), so ':' is always escaped.
+# Quoted flowchart text: '"' ends the string; '<x' would become an HTML tag,
+# a raw '&amp;' would be shown as '&', and a leading '`' makes it a Markdown string.
+_FLOW = {"#": "#35;", '"': "#quot;", "<": "#lt;", ">": "#gt;", "&": "#38;", "`": "#96;", ":": "#58;"}
+# Edge labels are quoted too: unquoted pipe text cannot hold ( ) [ ] { } or '|',
+# quoted text can (checked on both versions), so _FLOW is enough.
+_EDGE = _FLOW
+# erDiagram entity aliases cannot hold '%' or '\' even inside quotes.
+_ERD = {"#": "#35;", '"': "#quot;", "<": "#lt;", ">": "#gt;", "&": "#38;", "%": "#37;", "\\": "#92;", ":": "#58;"}
+# Sequence text runs to the next '#' or ';', and a leading 'wrap:' / 'nowrap:'
+# is a directive.
+_SEQ = {"#": "#35;", ";": "#59;", ":": "#58;"}
 
 
 def _flow_text(s: str) -> str:
@@ -44,6 +59,10 @@ def _flow_text(s: str) -> str:
 
 def _edge_text(s: str) -> str:
     return _escape(s, _EDGE)
+
+
+def _erd_text(s: str) -> str:
+    return _escape(s, _ERD)
 
 
 def _seq_text(s: str) -> str:
@@ -71,7 +90,7 @@ def flow_mermaid(spec: FlowSpec) -> str:
             out.append(node_line(n, "    "))
     for e in spec.edges:
         arrow = ARROWS[e.style]
-        label = f"|{_edge_text(e.label)}|" if e.label else ""
+        label = f'|"{_edge_text(e.label)}"|' if e.label else ""
         out.append(f"    {e.src} {arrow}{label} {e.dst}")
     for t, tok in theme.NODE_TYPES.items():
         ids = [n.id for n in spec.nodes if n.type == t]
@@ -92,7 +111,7 @@ def flow_mermaid(spec: FlowSpec) -> str:
 def erd_mermaid(spec: ErdSpec) -> str:
     out = _front(spec.title) + ["erDiagram"]
     for ent in spec.entities:
-        head = ent.id if ent.label == ent.id else f'{ent.id}["{ent.label.replace(chr(34), "")}"]'
+        head = ent.id if ent.label == ent.id else f'{ent.id}["{_erd_text(ent.label)}"]'
         out.append(f"    {head} {{")
         for c in ent.columns:
             keys = ", ".join(k for k, on in (("PK", c.pk), ("FK", c.fk is not None)) if on)
@@ -106,8 +125,7 @@ def erd_mermaid(spec: ErdSpec) -> str:
     for r in spec.relations:
         left = PARENT_END[parent_marker_of(r)]
         right = CHILD_END[CHILD_MARKER[r.cardinality]]
-        label = (r.label or "").replace('"', "")
-        out.append(f'    {r.parent} {left}--{right} {r.child} : "{label}"')
+        out.append(f'    {r.parent} {left}--{right} {r.child} : "{_erd_text(r.label or "")}"')
     return "\n".join(out) + "\n"
 
 

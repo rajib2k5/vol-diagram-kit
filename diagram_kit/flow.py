@@ -20,6 +20,9 @@ EDGE_LABEL_SIZE = 11.5
 PILL_H = 20.0
 CARD_RX = 10.0
 TEXT_X = 56.0  # 14 pad + 30 badge + 12 gap
+LANE_LABEL_SIZE = 11.0
+LANE_LABEL_LS = 0.8
+LANE_LABEL_X = 16.0  # inset from the lane's left edge (and kept free on the right)
 EDGE_STYLE_NAMES = {"data": "Data flow", "control": "Control flow", "dashed": "Dashed"}
 
 
@@ -87,6 +90,13 @@ def pill_size(text: str) -> tuple[float, float]:
     return float(math.ceil(fit_width(text, EDGE_LABEL_SIZE) + 18.0)), PILL_H
 
 
+def lane_label_width(lane: Lane) -> float:
+    """Lane width its label needs: SVG draws it upper-cased and letter-spaced, draw.io as typed."""
+    text_w = max(fit_width(lane.label.upper(), LANE_LABEL_SIZE, True, LANE_LABEL_LS),
+                 fit_width(lane.label, LANE_LABEL_SIZE, True))
+    return float(math.ceil(2 * LANE_LABEL_X + text_w))
+
+
 def params_for(direction: str) -> Params:
     if direction == "TB":
         return Params(direction="TB", node_gap=40.0, port_spacing=44.0, port_min_spacing=40.0,
@@ -102,7 +112,8 @@ def build_scene(spec: FlowSpec) -> FlowScene:
     ledges = []
     for i, e in enumerate(spec.edges):
         ledges.append(LEdge(i, e.src, e.dst, label=pill_size(e.label) if e.label else None))
-    res = layout(boxes, ledges, [lane.id for lane in spec.lanes], params_for(spec.direction))
+    res = layout(boxes, ledges, [lane.id for lane in spec.lanes], params_for(spec.direction),
+                 lane_min_w={lane.id: lane_label_width(lane) for lane in spec.lanes})
 
     # content bounding box
     xs: list[float] = []
@@ -206,7 +217,8 @@ def draw_lane(svg: Svg, g: LaneGeom) -> None:
     stroke = theme.LANE_STROKES[g.index % len(theme.LANE_STROKES)]
     svg.open("g", {"id": f"lane_{g.lane.id}"})
     svg.el("rect", {"x": g.x, "y": g.y, "width": g.w, "height": g.h, "rx": 14, "fill": fill, "stroke": stroke, "stroke-width": 1})
-    svg.text(g.x + 16, g.y + 20, g.lane.label.upper(), 11, theme.LANE_INK, 700, letter_spacing=0.8)
+    svg.text(g.x + LANE_LABEL_X, g.y + 20, g.lane.label.upper(), LANE_LABEL_SIZE, theme.LANE_INK, 700,
+             letter_spacing=LANE_LABEL_LS)
     svg.close("g")
 
 

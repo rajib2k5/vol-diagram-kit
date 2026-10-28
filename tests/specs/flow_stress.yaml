@@ -1,0 +1,48 @@
+# 15 nodes / 4 lanes / 21 edges from the adversarial review (LR as written there).
+# Tests build it as written and with direction TB.
+kind: flow
+title: Vol research platform stress test
+subtitle: 15 nodes, 4 lanes, feedback and parallel edges
+lanes:
+  - {id: src, label: Market and reference data acquisition from vendors}
+  - {id: plat, label: Data platform}
+  - {id: mdl, label: Models}
+  - {id: out, label: Delivery}
+nodes:
+  - {id: cboe, label: CBOE option chains, sublabel: EOD CSV via SFTP, type: source, lane: src}
+  - {id: yf, label: yfinance, type: external, lane: src}
+  - {id: fred, label: FRED rates, sublabel: risk-free curve, type: external, lane: src}
+  - {id: raw, label: Raw store, sublabel: partitioned Parquet, type: store, lane: plat}
+  - {id: clean, label: Cleaner, sublabel: arbitrage and stale-quote filters, type: process, lane: plat}
+  - {id: surf, label: SVI surface fitter, type: process, lane: plat}
+  - {id: feat, label: Feature builder, sublabel: 'RV 1d/5d/22d, ATM IV, skew, term slope', type: process, lane: plat}
+  - {id: wide, label: WWWWWWWWWWWWWWWWWWWWWWWW, sublabel: mmmmmmmmmmmmmmmmmmmmmmmmmmmm, type: store, lane: plat}
+  - {id: har, label: HAR-RV, type: model, lane: mdl}
+  - {id: garch, label: 'GARCH(1,1) with Student-t innovations', type: model, lane: mdl}
+  - {id: lstm, label: LSTM, type: model, lane: mdl}
+  - {id: ens, label: Ensemble, type: model, lane: mdl}
+  - {id: evalx, label: Evaluation, sublabel: 'QLIKE, MSE, Diebold-Mariano', type: process, lane: mdl}
+  - {id: api, label: Forecast API, type: output, lane: out}
+  - {id: ui, label: React dashboard, type: ui, lane: out}
+edges:
+  - {from: cboe, to: raw, label: daily CSV}
+  - {from: yf, to: raw, label: REST pull}
+  - {from: fred, to: raw}
+  - {from: raw, to: clean}
+  - {from: clean, to: surf, label: clean quotes}
+  - {from: clean, to: feat}
+  - {from: surf, to: feat, label: ATM IV and skew}
+  - {from: raw, to: wide, style: dashed}
+  - {from: feat, to: har}
+  - {from: feat, to: garch}
+  - {from: feat, to: lstm}
+  - {from: har, to: ens}
+  - {from: garch, to: ens}
+  - {from: lstm, to: ens}
+  - {from: ens, to: evalx, label: forecasts}
+  - {from: ens, to: evalx, label: weights, style: dashed}
+  - {from: evalx, to: api, label: best model}
+  - {from: api, to: ui, label: fetch}
+  - {from: api, to: ui, label: websocket push, style: dashed}
+  - {from: evalx, to: feat, label: retrain trigger, style: control}
+  - {from: raw, to: evalx, label: realized vol, style: dashed}

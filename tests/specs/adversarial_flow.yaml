@@ -1,0 +1,21 @@
+# Every printable ASCII punctuation mark, plus the characters that broke
+# Mermaid / draw.io in review, in every place a flow puts user text.
+# (No '<' in the title: Mermaid cannot show it there, so validation rejects it.)
+kind: flow
+title: 'Flow labels: P&L "q" #1; (x) [y] {z} 50% a\b |p| σ² → &amp; ok'
+subtitle: 'subtitle <sub> & "more" #2'
+lanes:
+  - {id: ingest, label: 'Ingest & <prep> (raw) #1; "q"'}
+  - {id: model, label: 'Model {fit} [v2] 50% a\b |p|'}
+nodes:
+  - {id: a, label: 'fit <daily> (x) [y] {z} &amp;', sublabel: '<id> & &amp; "q"', type: source, lane: ingest}
+  - {id: b, label: '50% a\b #1; |p|', sublabel: 'σ² → vol: style:#1; z', type: process, lane: ingest}
+  - {id: c, label: 'all !"#$%&''()*+,-./:;<=>?@[\]^_`{|}~', type: model, lane: model}
+  - {id: d, label: '`md` *not bold* wrap: me', sublabel: '#quot; raw #35; </b>', type: output, lane: model}
+edges:
+  - {from: a, to: b, label: 'fit (daily)'}
+  - {from: a, to: c, label: 'f(x) [y] {z}'}
+  - {from: b, to: c, label: '<id> & &amp; "q"', style: dashed}
+  - {from: b, to: d, label: '50% a\b #1; |p| `md`'}
+  - {from: c, to: d, label: 'σ² → vol; style:#1;', style: control}
+  - {from: d, to: a, label: 'all !"#$%&''()*+,-./:;<=>?@[\]^_`{|}~'}

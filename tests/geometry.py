@@ -93,5 +93,29 @@ def shared_run(a: list[Pt], b: list[Pt], min_len: float = 1.0) -> bool:
     return False
 
 
+def too_close(a: list[Pt], b: list[Pt], sep: float) -> bool:
+    """Do two orthogonal polylines have parallel runs closer than ``sep``?
+
+    Two runs on the same axis that are less than ``sep`` apart across it count
+    when they overlap along it or leave less than ``sep`` between their ends
+    (collinear runs with a small gap read as one line).
+    """
+    for a0, a1 in zip(a, a[1:]):
+        for b0, b1 in zip(b, b[1:]):
+            for along in (0, 1):
+                across = 1 - along
+                if abs(a0[across] - a1[across]) > 1e-6 or abs(b0[across] - b1[across]) > 1e-6:
+                    continue
+                if abs(a0[along] - a1[along]) < 1e-6 or abs(b0[along] - b1[along]) < 1e-6:
+                    continue
+                if abs(a0[across] - b0[across]) >= sep:
+                    continue
+                lo = max(min(a0[along], a1[along]), min(b0[along], b1[along]))
+                hi = min(max(a0[along], a1[along]), max(b0[along], b1[along]))
+                if lo - hi < sep:
+                    return True
+    return False
+
+
 def label_rect(center: Pt, w: float, h: float) -> Rect:
     return center[0] - w / 2, center[1] - h / 2, w, h

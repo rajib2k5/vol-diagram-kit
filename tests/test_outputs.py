@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html.parser
 import os
 import struct
 import subprocess
@@ -10,11 +11,18 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from diagram_kit import erd, flow
+from diagram_kit import erd, flow, theme
+from diagram_kit.cli import generate
 from diagram_kit.png import svg_size
 from diagram_kit.spec import Block, ErdSpec, FlowSpec, Message, SequenceSpec
 
 from .conftest import EXAMPLE_SPECS, ROOT
+
+
+@pytest.fixture(scope="module")
+def all_files(all_specs) -> dict[str, bytes]:
+    """Every format except PNG for the examples and tests/specs (adversarial labels, id collisions, stress)."""
+    return generate(all_specs, png=False, renderer=None)
 
 SVG_NS = "{http://www.w3.org/2000/svg}"
 # Elements Figma imports as plain editable vectors / text.
@@ -66,16 +74,16 @@ def test_every_example_has_all_formats(example_specs, example_files):
     assert len(example_files) == 5 + 5 + 3
 
 
-def test_svg_well_formed_and_contains_every_label(example_specs, example_files):
-    for spec in example_specs:
-        texts = _texts(example_files[f"{spec.name}.svg"])
+def test_svg_well_formed_and_contains_every_label(all_specs, all_files):
+    for spec in all_specs:
+        texts = _texts(all_files[f"{spec.name}.svg"])
         for want in expected_texts(spec):
             assert want in texts, f"{spec.name}: {want!r} missing from SVG text"
 
 
-def test_svg_uses_only_figma_safe_primitives(example_specs, example_files):
-    for spec in example_specs:
-        data = example_files[f"{spec.name}.svg"]
+def test_svg_uses_only_figma_safe_primitives(all_specs, all_files):
+    for spec in all_specs:
+        data = all_files[f"{spec.name}.svg"]
         root = ET.fromstring(data)
         tags = {el.tag.replace(SVG_NS, "") for el in root.iter()}
         assert tags <= ALLOWED_SVG, f"{spec.name}: unexpected elements {tags - ALLOWED_SVG}"
@@ -150,11 +158,99 @@ def _structure_problems(data: bytes) -> list[str]:
 
 
 @pytest.mark.parametrize("ext", [".drawio", ".lucid.xml"])
-def test_mxgraph_structure(example_specs, example_files, ext):
-    for spec in example_specs:
+def test_mxgraph_structure(all_specs, all_files, ext):
+    for spec in all_specs:
         if spec.kind == "sequence":
             continue
-        assert _structure_problems(example_files[f"{spec.name}{ext}"]) == [], spec.name
+        assert _structure_problems(all_files[f"{spec.name}{ext}"]) == [], spec.name
+
+
+@pytest.mark.parametrize("ext", [".drawio", ".lucid.xml"])
+def test_mxgraph_cell_ids_are_unique(all_specs, all_files, ext):
+    """draw.io keeps only the first cell of a duplicate id and silently drops the rest."""
+    names = {s.name for s in all_specs if s.kind != "sequence"}
+    assert "id_collision_erd" in names  # columns option/option_type, account/account_name, entity contract_option
+    for name in sorted(names):
+        _, cells = _model(all_files[f"{name}{ext}"])
+        ids = [c.get("id") for c in cells]
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        assert dupes == [], f"{name}{ext}: duplicate cell ids {dupes}"
+
+
+class _HtmlText(html.parser.HTMLParser):
+    """What draw.io shows for an html=1 value: its text, plus the tags it would interpret."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.text: list[str] = []
+        self.tags: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append(tag)
+
+    def handle_startendtag(self, tag, attrs):
+        self.tags.append(tag)
+
+    def handle_data(self, data):
+        self.text.append(data)
+
+
+def _shown(value: str) -> tuple[str, set[str]]:
+    p = _HtmlText()
+    p.feed(value)
+    p.close()
+    return "".join(p.text), set(p.tags)
+
+
+def _html_expectations(spec) -> dict[str, tuple[str, set[str]]]:
+    """cell id -> (text draw.io must show, tags allowed in the value), straight from the spec."""
+    want = {"title": (spec.title, set())}
+    if spec.subtitle:
+        want["subtitle"] = (spec.subtitle, set())
+    if isinstance(spec, FlowSpec):
+        for lane in spec.lanes:
+            want[f"lane_{lane.id}"] = (lane.label, set())
+        for n in spec.nodes:
+            # caption, bold label, muted sublabel: the only markup the kit writes
+            want[f"node_{n.id}"] = (theme.NODE_TYPES[n.type]["caption"] + n.label + (n.sublabel or ""), {"font", "b", "br"})
+        for i, e in enumerate(spec.edges):
+            want[f"edge_{i}"] = (e.label or "", set())
+    else:
+        for ent in spec.entities:
+            want[f"entity_{ent.id}"] = (ent.label, set())
+            for c in ent.columns:
+                want[f"row-{ent.id}-{c.name}"] = ("", set())
+                keys = ", ".join(k for k, on in (("PK", c.pk), ("FK", c.fk is not None)) if on)
+                want[f"row-{ent.id}-{c.name}-key"] = (keys, set())
+                want[f"row-{ent.id}-{c.name}-name"] = (c.name, set())
+                want[f"row-{ent.id}-{c.name}-type"] = (c.type + ("?" if c.nullable else ""), set())
+        for i, r in enumerate(spec.relations):
+            want[f"relation_{i}"] = (r.label or "", set())
+    return want
+
+
+def test_drawio_html_labels_show_the_spec_text(all_specs, all_files):
+    """html=1 values are HTML: unescaping them must give back the spec text, with no stray tags.
+
+    The adversarial specs put '<id>', '&amp;', '"' and every ASCII punctuation mark in
+    every label position; an unescaped '<daily>' would parse as a tag and vanish.
+    """
+    checked = 0
+    for spec in all_specs:
+        if spec.kind == "sequence":
+            continue
+        _, cells = _model(all_files[f"{spec.name}.drawio"])
+        want = _html_expectations(spec)
+        for c in cells:
+            if c.get("id") in ("0", "1") or _style(c).get("html") != "1":
+                continue
+            assert c.get("id") in want, f"{spec.name}: html=1 cell {c.get('id')} has no expectation"
+            text, allowed = want[c.get("id")]
+            shown, tags = _shown(c.get("value") or "")
+            assert shown == text, f"{spec.name} {c.get('id')}: draw.io shows {shown!r}, spec says {text!r}"
+            assert tags <= allowed, f"{spec.name} {c.get('id')}: interprets tags {tags - allowed}"
+            checked += 1
+    assert checked > 100
 
 
 def _absolute(cells_by_id, cid) -> tuple[float, float, float, float]:
@@ -181,12 +277,12 @@ def _style(c) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("ext", [".drawio", ".lucid.xml"])
-def test_mxgraph_geometry_matches_svg_scene(example_specs, example_files, ext):
+def test_mxgraph_geometry_matches_svg_scene(all_specs, all_files, ext):
     """Same boxes, same waypoints, same terminal points as the SVG scene."""
-    for spec in example_specs:
+    for spec in all_specs:
         if spec.kind == "sequence":
             continue
-        _, cells = _model(example_files[f"{spec.name}{ext}"])
+        _, cells = _model(all_files[f"{spec.name}{ext}"])
         by_id = {c.get("id"): c for c in cells}
         if isinstance(spec, FlowSpec):
             sc = flow.build_scene(spec)
@@ -215,11 +311,14 @@ def test_mxgraph_geometry_matches_svg_scene(example_specs, example_files, ext):
             assert end == pytest.approx(pts[-1], abs=0.05), f"{spec.name}{ext} {cid} end"
 
 
-def test_lucid_xml_is_conservative(example_specs, example_files):
-    for spec in example_specs:
+def test_lucid_xml_is_conservative(all_specs, all_files):
+    for spec in all_specs:
         if spec.kind == "sequence":
             continue
-        _, cells = _model(example_files[f"{spec.name}.lucid.xml"])
+        _, cells = _model(all_files[f"{spec.name}.lucid.xml"])
+        plain = {spec.title, spec.subtitle}
+        if isinstance(spec, FlowSpec):
+            plain |= {lane.label for lane in spec.lanes} | {e.label or "" for e in spec.edges}
         for c in cells:
             if c.get("id") in ("0", "1"):
                 continue
@@ -228,7 +327,9 @@ def test_lucid_xml_is_conservative(example_specs, example_files):
             assert st.get("html") == "0", c.get("id")
             assert not any(v.startswith("ER") for v in st.values()), c.get("id")
             assert c.get("parent") == "1", "Lucid flavour uses flat absolute geometry"
-            assert "<" not in (c.get("value") or ""), "no HTML labels"
+            assert "<b>" not in (c.get("value") or "") and "<font" not in (c.get("value") or ""), "no HTML labels"
+            if c.get("id") in ("title", "subtitle") or c.get("id").startswith(("lane_", "edge_")):
+                assert c.get("value") in plain, f"{spec.name} {c.get('id')}: plain-text label altered"
 
 
 def test_drawio_erd_uses_table_rows_and_er_arrows(example_specs, example_files):
@@ -238,12 +339,12 @@ def test_drawio_erd_uses_table_rows_and_er_arrows(example_specs, example_files):
     for ent in spec.entities:
         assert _style(by_id[f"entity_{ent.id}"]).get("shape") == "table"
         for col in ent.columns:
-            row = by_id[f"row_{ent.id}_{col.name}"]
+            row = by_id[f"row-{ent.id}-{col.name}"]
             assert _style(row).get("shape") == "tableRow" and row.get("parent") == f"entity_{ent.id}"
     for i, r in enumerate(spec.relations):
         c = by_id[f"relation_{i}"]
-        assert c.get("source") == f"row_{r.parent}_{r.parent_col}"
-        assert c.get("target") == f"row_{r.child}_{r.child_col}"
+        assert c.get("source") == f"row-{r.parent}-{r.parent_col}"
+        assert c.get("target") == f"row-{r.child}-{r.child_col}"
         assert _style(c)["endArrow"].startswith("ER")
 
 

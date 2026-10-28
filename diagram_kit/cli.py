@@ -76,8 +76,13 @@ def write_outputs(files: dict[str, bytes], out_dir: Path) -> list[Path]:
     return written
 
 
-def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None, full: bool) -> list[str]:
-    """Regenerate into a temp dir and diff against out_dir. Returns human-readable problems."""
+def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None, only: str | None = None) -> list[str]:
+    """Regenerate into a temp dir and diff against out_dir. Returns human-readable problems.
+
+    Stale files are outputs with no spec behind them, or of a format the spec's
+    kind does not produce. With ``only``, just that spec's files are judged:
+    outputs left behind by other (possibly deleted) specs need a full check.
+    """
     problems: list[str] = []
     with tempfile.TemporaryDirectory(prefix="diagram-kit-check-") as tmp:
         tmp_dir = Path(tmp)
@@ -89,7 +94,7 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None, f
             problems.append(f"missing  {have}")
         elif have.read_bytes() != data:
             problems.append(f"differs  {have}")
-    if full and out_dir.is_dir():
+    if out_dir.is_dir():
         known = {s.name: s.kind for s in specs}
         for p in sorted(out_dir.iterdir()):
             parsed = _stem_and_ext(p.name)
@@ -97,6 +102,8 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None, f
                 continue
             stem, ext = parsed
             if ext == ".png" and not png:
+                continue
+            if only is not None and stem != only:
                 continue
             if stem not in known or ext not in EXTENSIONS[known[stem]]:
                 problems.append(f"stale    {p}")
@@ -112,7 +119,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, required=True, help="output directory")
     ap.add_argument("--check", action="store_true",
                     help="regenerate into a temp dir and exit 1 if anything differs from --out")
-    ap.add_argument("--only", metavar="NAME", help="only the spec whose file stem is NAME")
+    ap.add_argument("--only", metavar="NAME",
+                    help="only the spec whose file stem is NAME (with --check, stale files of other specs "
+                         "are not reported; CI should run a full --check)")
     ap.add_argument("--no-png", action="store_true", help="skip PNG rendering (and PNG comparison in --check)")
     ap.add_argument("--renderer", choices=RENDERERS, default=None,
                     help="PNG backend (default: resvg, or $DIAGRAM_KIT_PNG_RENDERER)")
@@ -132,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     png = not args.no_png
     try:
         if args.check:
-            problems = compare(specs, args.out, png, args.renderer, full=args.only is None)
+            problems = compare(specs, args.out, png, args.renderer, only=args.only)
             if problems:
                 print(f"diagrams out of date ({len(problems)}):", file=sys.stderr)
                 for line in problems:

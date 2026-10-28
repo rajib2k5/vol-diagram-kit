@@ -53,9 +53,9 @@ def test_extra_flows_parse(name, tmp_path):
 def test_escaping_survives_mermaid(tmp_path):
     flow = spec_from("""
         kind: flow
-        title: 'Esc "quotes" #1; <tags>'
+        title: 'Esc "quotes" #1; (no angle brackets: Mermaid titles cannot show them)'
         nodes:
-          - {id: a, label: 'A "q" <b> #x', sublabel: 'semi; colon: pipe |', type: source}
+          - {id: a, label: 'A "q" <b> #x <tags>', sublabel: 'semi; colon: pipe |', type: source}
           - {id: b, label: B, type: store}
         edges:
           - {from: a, to: b, label: 'a | b; #2 "c"'}

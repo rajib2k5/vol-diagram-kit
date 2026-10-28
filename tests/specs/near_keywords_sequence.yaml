@@ -1,0 +1,15 @@
+# Ids next to Mermaid keywords that validation accepts (including the '<id>_id'
+# rename its error messages suggest) must still parse.
+kind: sequence
+title: Near-keyword ids
+participants:
+  - {id: over_id}
+  - {id: link_id}
+  - {id: left}
+  - {id: as}
+  - {id: x}
+messages:
+  - {from: over_id, to: link_id, label: m1}
+  - {from: link_id, to: left, label: m2}
+  - {from: left, to: as, label: m3, kind: async}
+  - {from: as, to: x, label: m4, kind: return}

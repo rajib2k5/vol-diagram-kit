@@ -1,8 +1,10 @@
 # End-to-end architecture of an implied-volatility forecasting pipeline.
+# TB, not LR: with seven ranks, LR is ~2500 px wide and a README shrinks it to a
+# third; TB is as wide as the widest rank (the three models), 900 px.
 kind: flow
 title: Implied-vol forecasting pipeline
 subtitle: Daily batch from raw option quotes to the React dashboard
-direction: LR
+direction: TB
 
 lanes:
   - id: ingest

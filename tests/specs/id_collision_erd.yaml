@@ -1,0 +1,25 @@
+# Names that collided as draw.io cell ids under the old row_{entity}_{column}
+# scheme (+ _key/_name/_type children): option + _type vs option_type,
+# account + _name vs account_name, and entity contract_option + column type.
+kind: erd
+title: Cell id collisions
+entities:
+  - id: contract
+    columns:
+      - {name: contract_id, type: bigint, pk: true}
+      - {name: option, type: text}
+      - {name: option_type, type: text}
+      - {name: option_key, type: text}
+  - id: contract_option
+    columns:
+      - {name: type, type: text, pk: true}
+      - {name: contract_id, type: bigint, fk: contract.contract_id}
+  - id: ledger
+    columns:
+      - {name: account, type: bigint, pk: true}
+      - {name: account_name, type: text}
+      - {name: account_type, type: text}
+  - id: entry
+    columns:
+      - {name: entry_id, type: bigint, pk: true}
+      - {name: account, type: bigint, fk: ledger.account}

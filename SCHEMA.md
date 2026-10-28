@@ -15,9 +15,25 @@ Three kinds exist: `flow`, `erd`, `sequence`. Every kind accepts:
 ## Rules that apply everywhere
 
 - **Ids** (`id`, `lane`, `from`, `to`, column `name`) match `[A-Za-z_][A-Za-z0-9_]*`
-  and must not be a Mermaid keyword (`end`, `graph`, `subgraph`, `class`, `style`,
-  `loop`, `alt`, `note`, ...). Ids are case-sensitive.
+  and must not be a Mermaid keyword, compared ignoring case. Ids are case-sensitive
+  otherwise. Every kind rejects `end`, `graph`, `flowchart`, `subgraph`, `style`,
+  `classDef`, `class`, `click`, `linkStyle`, `direction`, `default`, `call`, `href`,
+  `participant`, `actor`, `loop`, `alt`, `else`, `opt`, `par`, `and`, `note`, `rect`,
+  `critical`, `break`, `autonumber`, `activate`, `deactivate`, `title`, `box`,
+  `create`, `destroy`. Each diagram type adds the words that broke its Mermaid
+  parser (12.2.0 or 11.17.2) in a probe:
+  - flow node / lane ids: `interpolate`, `_self`, `_blank`, `_parent`, `_top`;
+  - ERD entity ids: `one`, `many`, `to`, `erDiagram`, `accTitle`, `accDescr`;
+  - ERD column names **and** column types: `pk`, `fk`, `uk` (any case);
+  - sequence participant ids: `over`, `option`, `par_over`, `off`, `link`, `links`,
+    `properties`, `details`, `sequenceDiagram`, `accTitle`, `accDescr`.
+
+  The error suggests a rename such as `over_id`.
 - **Text** (labels, notes) is one line. No automatic wrapping: keep labels short.
+  Any printable character the font covers is fine in labels; the Mermaid output
+  escapes it for each context. The one exception is the **title**, which must not
+  contain `<`: Mermaid drops `<word>` from a diagram title as an HTML tag and
+  prints any other `<` as `&lt;`.
 - **Characters**: only characters the bundled PNG font can draw are accepted
   (printable ASCII, Latin-1, and `– — ‘ ’ “ ” • … → ← ↑ ↓ ↔ × · ≤ ≥ ≈ ≠ ± σ μ Δ Σ β θ λ ρ τ ν ω √ ∞ €`).
   Anything else (emoji, `⇒`, CJK) is rejected with the offending code point.
@@ -37,7 +53,7 @@ Architecture, data-flow and process diagrams.
 
 | key         | required | type | default | notes |
 |-------------|----------|------|---------|-------|
-| `direction` | no  | `LR` \| `TB` | `LR` | flow runs left→right or top→bottom |
+| `direction` | no  | `LR` \| `TB` | `LR` | flow runs left→right or top→bottom; use `TB` beyond ~4 ranks so a README can show it (README, "Wide flows") |
 | `lanes`     | no  | list of lane | — | swimlanes / containers (see below) |
 | `nodes`     | yes | list of node | — | at least one |
 | `edges`     | no  | list of edge | — | |
@@ -91,6 +107,9 @@ least one node. A lane is a rounded container around its nodes:
 | ui | rounded `("…")` |
 
 Lanes become `subgraph`s; colours become `classDef`/`style`/`linkStyle` lines.
+Edge labels are quoted (`-->|"fit (daily)"|`), and `#`, `"`, `<`, `>`, `&`, `` ` ``
+and `:` in any label become Mermaid entity codes (`#35;`, `#quot;`, ...), which
+render as the original text.
 Mermaid lays the graph out itself, so its geometry differs from the SVG.
 
 ### Full example

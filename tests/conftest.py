@@ -11,6 +11,8 @@ from diagram_kit.spec import parse_spec
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_SPECS = ROOT / "examples" / "specs"
 EXAMPLE_OUT = ROOT / "examples" / "out"
+# Adversarial labels, id-collision names and the 15-node review stress flow.
+TEST_SPECS = ROOT / "tests" / "specs"
 
 
 def spec_from(text: str, name: str = "t"):
@@ -20,6 +22,16 @@ def spec_from(text: str, name: str = "t"):
 @pytest.fixture(scope="session")
 def example_specs():
     return load_all(EXAMPLE_SPECS, None)
+
+
+@pytest.fixture(scope="session")
+def test_specs():
+    return load_all(TEST_SPECS, None)
+
+
+@pytest.fixture(scope="session")
+def all_specs(example_specs, test_specs):
+    return list(example_specs) + list(test_specs)
 
 
 @pytest.fixture(scope="session")

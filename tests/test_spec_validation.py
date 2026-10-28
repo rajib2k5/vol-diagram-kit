@@ -68,7 +68,7 @@ def test_valid_flow_parses():
          "edges[1]: duplicate edge src -> features"),
         (lambda s: s.replace("edges:", "edgse:"), "edgse: unknown key (did you mean 'edges'?)"),
         (lambda s: s.replace("{id: src, label: Source", "{id: end, label: Source").replace("from: src", "from: end"),
-         "nodes[0].id: node id 'end' is a Mermaid keyword"),
+         "nodes[0].id: node id 'end' is a Mermaid flowchart keyword; pick another id, e.g. 'end_id'"),
         (lambda s: s.replace("label: Source", "label: Source 🚀"),
          "nodes[0].label: contains '🚀' (U+1F680), which the bundled PNG font cannot draw"),
         (lambda s: s.replace("title: T\n", ""), "title: is required"),
@@ -224,3 +224,106 @@ def test_valid_sequence_parses():
 def test_sequence_errors(mutate, expected):
     errs = errors_of(mutate(SEQ_OK))
     assert any(expected in e for e in errs), errs
+
+
+# ------------------------------------------------- Mermaid keywords per diagram type
+# Each word below failed to parse as an id in a probe file with Mermaid 12.2.0 and/or
+# 11.17.2 (flowchart, erDiagram, sequenceDiagram respectively).
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (FLOW_OK.replace("{id: src,", "{id: interpolate,").replace("from: src", "from: interpolate"),
+         "nodes[0].id: node id 'interpolate' is a Mermaid flowchart keyword; pick another id, e.g. 'interpolate_id'"),
+        (FLOW_OK.replace("{id: a, label: A}", "{id: _self, label: A}").replace("lane: a", "lane: _self"),
+         "lanes[0].id: lane id '_self' is a Mermaid flowchart keyword"),
+        (ERD_OK.replace("id: quote", "id: One").replace("quote.quote_id", "One.quote_id"),
+         "entities[0].id: entity id 'One' is a Mermaid erDiagram keyword; pick another id, e.g. 'One_id'"),
+        (ERD_OK.replace("id: fill", "id: to").replace("fill.quote_id", "to.quote_id"),
+         "entities[1].id: entity id 'to' is a Mermaid erDiagram keyword"),
+        (ERD_OK.replace("{name: price, type: numeric}", "{name: PK, type: numeric}"),
+         "entities[0].columns[1].name: column name 'PK' is a Mermaid erDiagram key marker (PK/FK/UK in any case); "
+         "rename it, e.g. 'PK_id'"),
+        (ERD_OK.replace("{name: price, type: numeric}", "{name: price, type: Uk}"),
+         "entities[0].columns[1].type: column type 'Uk' is a Mermaid erDiagram key marker"),
+        (SEQ_OK.replace("{id: b}", "{id: over}").replace("to: b", "to: over").replace("from: b", "from: over"),
+         "participants[1].id: participant id 'over' is a Mermaid sequenceDiagram keyword; pick another id, e.g. 'over_id'"),
+        (SEQ_OK.replace("{id: b}", "{id: Link}").replace("to: b", "to: Link").replace("from: b", "from: Link"),
+         "participants[1].id: participant id 'Link' is a Mermaid sequenceDiagram keyword"),
+    ],
+)
+def test_mermaid_keyword_ids_are_rejected_with_a_rename(text, expected):
+    errs = errors_of(text)
+    assert len(errs) == 1 and errs[0].startswith(expected), errs
+
+
+def test_keywords_of_other_diagram_types_stay_allowed():
+    """'one' only breaks erDiagram and 'over' only sequenceDiagram: a flow may use both."""
+    spec = spec_from(FLOW_OK.replace("src", "one").replace("features", "over"))
+    assert [n.id for n in spec.nodes] == ["one", "over"]
+    spec = spec_from(ERD_OK.replace("id: fill", "id: over").replace("fill.quote_id", "over.quote_id"))
+    assert spec.entities[1].id == "over"
+
+
+@pytest.mark.parametrize("kind_ok", [FLOW_OK, ERD_OK, SEQ_OK])
+@pytest.mark.parametrize("title", ["Daily <batch>", "x <5", "a<b"])
+def test_title_with_less_than_is_rejected(kind_ok, title):
+    """Mermaid drops '<batch>' from a title and shows any other '<' as '&lt;'."""
+    err = one_error(kind_ok.replace("title: T", f"title: '{title}'"))
+    assert err.startswith("title: Mermaid cannot show '<' in a diagram title"), err
+
+
+# ----------------------------------------------------------- no cascading errors
+# A rejected item is still registered, so later references to it are not
+# reported again as "unknown" / "has no nodes".
+
+
+@pytest.mark.parametrize(
+    "text, only_error",
+    [
+        ("kind: flow\ntitle: t\nlanes: [{id: ing, label: I}, {id: mdl, label: M}]\n"
+         "nodes: [{id: a, label: A, type: process, lane: ing}, {id: b, label: B, type: modle, lane: mdl}]\n"
+         "edges: [{from: a, to: b}]\n",
+         "nodes[1].type: 'modle' is not one of"),
+        ("kind: flow\ntitle: t\nlanes: [{id: ingest, label: I}, {id: mdl, label: M}]\n"
+         "nodes: [{id: a, label: A, type: process, lane: ingst}, {id: b, label: B, type: process, lane: mdl}]\n",
+         "nodes[0].lane: unknown lane 'ingst' (did you mean 'ingest'?)"),
+        ("kind: flow\ntitle: t\nnodes: [{id: a, label: A, type: process}, {id: end, label: E, type: output}]\n"
+         "edges: [{from: a, to: end}, {from: end, to: a}]\n",
+         "nodes[1].id: node id 'end' is a Mermaid flowchart keyword"),
+        ("kind: flow\ntitle: t\nnodes: [{id: a, label: A, type: process}, {id: on, label: E, type: output}]\n"
+         "edges: [{from: a, to: on}]\n",
+         "nodes[1].id: expected a string node id, got bool"),
+        ("kind: flow\ntitle: t\nlanes: [{id: x, label: X}]\n"
+         "nodes: [{id: a, label: A, type: process, lane: x}, {id: x, label: B, type: process, lane: x}]\n"
+         "edges: [{from: a, to: x}]\n",
+         "nodes[1].id: node id 'x' collides with a lane id"),
+        ("kind: flow\ntitle: t\nlanes: [{id: end, label: E}, {id: ok, label: K}]\n"
+         "nodes: [{id: a, label: A, type: process, lane: end}, {id: b, label: B, type: process, lane: ok}]\n",
+         "lanes[0].id: lane id 'end' is a Mermaid flowchart keyword"),
+        ("kind: erd\ntitle: t\nentities:\n"
+         "  - {id: q, columns: [{name: id, type: 'numeric(12,4)', pk: true}]}\n"
+         "  - {id: f, columns: [{name: id, type: int, pk: true}, {name: q_id, type: int, fk: q.id}]}\n"
+         "relations: [{from: f.q_id, to: q.id, cardinality: '1..*'}]\n",
+         "entities[0].columns[0].type: column type 'numeric(12,4)' must match"),
+        ("kind: erd\ntitle: t\nentities:\n"
+         "  - {id: many, columns: [{name: id, type: int, pk: true}]}\n"
+         "  - {id: f, columns: [{name: id, type: int, pk: true}, {name: m_id, type: int, fk: many.id}]}\n"
+         "relations: [{from: f.m_id, to: many.id}]\n",
+         "entities[0].id: entity id 'many' is a Mermaid erDiagram keyword"),
+        ("kind: erd\ntitle: t\nentities:\n"
+         "  - {id: q, columns: [{name: pk, type: int, pk: true}]}\n"
+         "  - {id: f, columns: [{name: id, type: int, pk: true}, {name: q_pk, type: int, fk: q.pk}]}\n",
+         "entities[0].columns[0].name: column name 'pk' is a Mermaid erDiagram key marker"),
+        ("kind: sequence\ntitle: t\nparticipants: [{id: a}, {id: over}]\n"
+         "messages: [{from: a, to: over, label: m}, {from: over, to: a, label: r}]\n",
+         "participants[1].id: participant id 'over' is a Mermaid sequenceDiagram keyword"),
+        ("kind: sequence\ntitle: t\nparticipants: [{id: a}, {id: off}]\n"
+         "messages: [{from: a, to: off, label: m}, {from: off, to: a, label: r}]\n",
+         "participants[1].id: expected a string participant id, got bool"),
+    ],
+)
+def test_a_bad_item_is_reported_once(text, only_error):
+    errs = errors_of(text)
+    assert len(errs) == 1 and errs[0].startswith(only_error), errs
