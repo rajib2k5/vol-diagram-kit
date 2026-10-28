@@ -37,6 +37,11 @@ WALK = "tests/test_mermaid_render.py::test_reserved_id_list_matches_this_bundle"
 REJECTED = "tests/test_spec_validation.py::test_ids_mermaid_cannot_take_are_rejected"
 CLI = "tests/test_cli.py"
 POSITIONS = "tests/test_mermaid_render.py::test_gate_checks_every_text_position"
+DEFECTS = "tests/test_mermaid_render.py::test_gate_reports_a_label_the_kit_drops_moves_repeats_or_reorders"
+HUB = "tests/test_cli.py::test_a_stale_file_changed_since_the_kit_wrote_it_is_kept_and_reported"
+LEGACY = "tests/test_cli.py::test_a_manifest_without_hashes_never_deletes"
+REFUSE = "tests/test_cli.py::test_build_refuses_to_overwrite_a_file_the_kit_cannot_show_it_wrote"
+HARDLINK = "tests/test_cli.py::test_outputs_replace_hard_links_instead_of_writing_through"
 
 # (id, what breaks, file, [(old, new), ...], tests expected to fail)
 MUTANTS = [
@@ -193,14 +198,14 @@ MUTANTS = [
      [("text = named.get(s, EDGE_STYLE_NAMES[s])", "text = EDGE_STYLE_NAMES[s]")],
      ["tests/test_outputs.py::test_dashed_edges_get_a_meaning_in_the_legend"]),
     ("N22", "build no longer deletes the manifest's stale files", "diagram_kit/cli.py",
-     [("            path.unlink()\n", "")], [CLI]),
+     [("        path.unlink()\n", "")], [CLI]),
     ("N23", "build deletes output-like files the manifest does not list", "diagram_kit/cli.py",
-     [("    owned = read_manifest(out_dir)\n    stale =",
-       "    owned = read_manifest(out_dir) + ([p.name for p in out_dir.iterdir() if _stem_and_ext(p.name)]"
-       " if out_dir.is_dir() else [])\n    stale =")], [CLI]),
+     [("    stale = [n for n in owned if n not in produced",
+       "    owned.update({p.name: sha256(p.read_bytes()) for p in out_dir.iterdir() if _stem_and_ext(p.name)"
+       " and p.is_file()} if out_dir.is_dir() else {})\n    stale = [n for n in owned if n not in produced")], [CLI]),
     ("N24", "manifest entries not restricted to plain output names", "diagram_kit/cli.py",
-     [("return [f for f in files if isinstance(f, str) and f == Path(f).name and _stem_and_ext(f) is not None]",
-       "return [f for f in files if isinstance(f, str)]")], [CLI]),
+     [("    return {f: h for f, h in entries.items() if f == Path(f).name and _stem_and_ext(f) is not None}",
+       "    return entries")], [CLI]),
     ("N25", "--check reads a directory where an output goes", "diagram_kit/cli.py",
      [("        if _blocked(have):\n", "        if False:\n")], [CLI]),
     ("N26", "printed remedy leaves out the hand removals", "diagram_kit/cli.py",
@@ -240,17 +245,19 @@ MUTANTS = [
      [('return C4_DETECTOR_RE.sub(lambda m: "c4" + m.group()[2:], val)', 'return val + "_id"')],
      ["tests/test_spec_validation.py::test_every_suggested_rename_is_accepted"]),
     ("C1", "build deletes symlinks the manifest lists", "diagram_kit/cli.py",
-     [("if not _blocked(path) and path.is_file():", "if path.is_file() or path.is_symlink():")], [CLI]),
+     [("if _blocked(path) or not path.is_file():  # anything", "if not (path.is_file() or path.is_symlink()):  #")],
+     [CLI]),
     ("C2", "a stale symlink is left to the build (which never removes it)", "diagram_kit/cli.py",
-     [("by_hand=p.name not in owned or _blocked(p)", "by_hand=p.name not in owned")], [CLI]),
+     [("                if p.name not in owned or _blocked(p):", "                if p.name not in owned:")], [CLI]),
     ("C3", "manifest lists names that are not files", "diagram_kit/cli.py",
-     [("manifest_text(n for n in keep if (out_dir / n).is_file())", "manifest_text(keep)")], [CLI]),
+     [("manifest_text({n: h for n, h in keep.items() if not _blocked(out_dir / n) and (out_dir / n).is_file()})",
+       "manifest_text(keep)")], [CLI]),
     ("C4", "outputs written through symlinks", "diagram_kit/cli.py",
      [("return path.is_symlink() or (path.exists() and not path.is_file())",
        "return path.exists() and not path.is_file()")], [CLI]),
     ("C5", "--check on an --out that is a file reports missing outputs", "diagram_kit/cli.py",
-     [('    if out_dir.exists() and not out_dir.is_dir():\n        raise OutputBlocked(f"--out {out_dir} is not a directory")\n'
-       '    for name, data in expected.items():', "    for name, data in expected.items():")], [CLI]),
+     [("    check_out_dir(out_dir)\n    owned = read_manifest(out_dir) if", "    owned = read_manifest(out_dir) if")],
+     [CLI]),
     ("C6", "remedy 'rm' without '--'", "diagram_kit/cli.py",
      [('else f"rm -- {q(str(p.path))}"', 'else f"rm {q(str(p.path))}"')], [CLI]),
     ("K1", "fk to an entity whose id YAML read as a number re-reported", "diagram_kit/spec.py",
@@ -259,6 +266,54 @@ MUTANTS = [
      [("if not _rejected_name(ent, bad_entity_ids):", "if not _among(ent, bad_entity_ids):")], [ONCE]),
     ("K3", "unreadable node: empty lanes reported on top", "diagram_kit/spec.py",
      [("lane_ref_unresolved = True  # an unreadable node may have been meant for any lane", "pass")], [ONCE]),
+    # --- the fourth review: its gate mutants mA-mD (kit defects in the .mmd), one per check added for them,
+    # and one per deletion / overwrite / load fix (needs Playwright and a Chromium: V1, V2)
+    ("G9", "flowchart edge labels dropped (review mutant mA)", "diagram_kit/mermaid.py",
+     [("""label = f'|"{_edge_text(e.label)}"|' if e.label else \"\"""", 'label = ""')], [RENDER]),
+    ("G10", "flowchart node labels rotated one node (review mutant mB)", "diagram_kit/mermaid.py",
+     [("def flow_mermaid(spec: FlowSpec) -> str:\n",
+       "def flow_mermaid(spec: FlowSpec) -> str:\n    import dataclasses as _dc\n    _labs = [n.label for n in spec.nodes]\n"
+       "    spec = _dc.replace(spec, nodes=tuple(_dc.replace(n, label=_labs[(i + 1) % len(_labs)])"
+       " for i, n in enumerate(spec.nodes)))\n")], [RENDER]),
+    ("G11", "sequence notes dropped (review mutant mC)", "diagram_kit/mermaid.py",
+     [("                if it.note:", "                if False and it.note:")], [RENDER]),
+    ("G12", "flowchart sublabels dropped (review mutant mD)", "diagram_kit/mermaid.py",
+     [("        if n.sublabel:", "        if False:")], [RENDER]),
+    ("G13", "gate stops checking placement", "diagram_kit/mermaid_check.py",
+     [('return placement(spec, ph, base["root"], base["tokens"]) + compare_texts(', "return compare_texts(")],
+     [DEFECTS]),
+    ("G14", "gate stops checking the order of messages / columns", "diagram_kit/mermaid_check.py",
+     [("        if [t for _, t in drawn_order] != placed:", "        if False:")], [DEFECTS + "[messages_swapped]"]),
+    ("G15", "gate accepts a label drawn more often than the spec uses it", "diagram_kit/mermaid_check.py",
+     [("            if free:\n", "            if False:\n")], [DEFECTS + "[label_repeated]"]),
+    ("G16", "gate accepts a relation label on any relation", "diagram_kit/mermaid_check.py",
+     [('wants[tok(f"relations[{i}].label")] = [{"edge": eid}]', 'wants[tok(f"relations[{i}].label")] = [{}]')],
+     [DEFECTS + "[relation_labels_swapped]"]),
+    ("V1", "--verify-mermaid accepts any bundle version", "diagram_kit/cli.py",
+     [("if version != GITHUB_MERMAID_VERSION and os.environ.get(ENV_VERSION_OK) != version:", "if False:")],
+     ["tests/test_cli.py::test_a_bundle_that_is_not_mermaid_12_2_0_exits_2_unless_accepted"]),
+    ("V2", "a bundle that does not load is a traceback again", "diagram_kit/mermaid_check.py",
+     [("        except Error as exc:\n            raise GateUnavailable(f\"{ENV_MERMAID_JS}",
+       "        except ZeroDivisionError as exc:\n            raise GateUnavailable(f\"{ENV_MERMAID_JS}")],
+     ["tests/test_cli.py::test_a_bundle_that_does_not_load_exits_2_with_install_steps"]),
+    ("D1", "build deletes a stale listed file whatever its bytes (the hub's data loss)", "diagram_kit/cli.py",
+     [("        if owned[name] is None or sha256(path.read_bytes()) != owned[name]:", "        if False:")],
+     [HUB, LEGACY]),
+    ("D2", "a manifest without hashes counts as verified", "diagram_kit/cli.py",
+     [("        if owned[name] is None or sha256(path.read_bytes()) != owned[name]:",
+       "        if owned[name] is not None and sha256(path.read_bytes()) != owned[name]:")], [LEGACY]),
+    ("D3", "build overwrites files the kit cannot show it wrote", "diagram_kit/cli.py",
+     [("    conflicts = [] if overwrite else not_owned(files, out_dir, owned)", "    conflicts = []")], [REFUSE]),
+    ("D4", "--overwrite ignored", "diagram_kit/cli.py",
+     [("    conflicts = [] if overwrite else not_owned(", "    conflicts = not_owned(")], [REFUSE]),
+    ("D5", "a file listed without a hash is overwritten", "diagram_kit/cli.py",
+     [("        elif owned[name] is None:\n", "        elif False:\n")], [REFUSE + "[listed_without_hash]"]),
+    ("D6", "outputs written in place (through hard links)", "diagram_kit/cli.py",
+     [("        replace_file(path, data)\n", "        path.write_bytes(data)\n")], [HARDLINK]),
+    ("D7", "new outputs keep mkstemp's 0600 mode", "diagram_kit/cli.py",
+     [("        os.chmod(tmp, 0o666 & ~umask)\n", "")], [HARDLINK]),
+    ("D8", "--out that is a symlink followed", "diagram_kit/cli.py",
+     [("    if out_dir.is_symlink():\n", "    if False:\n")], ["tests/test_cli.py::test_out_that_is_a_symlink_is_refused"]),
 ]
 
 

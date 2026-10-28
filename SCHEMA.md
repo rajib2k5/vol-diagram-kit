@@ -56,7 +56,8 @@ Three kinds exist: `flow`, `erd`, `sequence`. Every kind accepts:
   codes for `# : % $ ¶` everywhere, plus `" < > & \` `` ` `` in flowcharts,
   `" < > & \ * _ ~` in ERDs, `; <` in sequence diagrams, and the first letter
   of `direction` and of `C4Container`/`C4Component`/`C4Dynamic`/`C4Deployment`),
-  and `build.py --verify-mermaid` checks that every label renders as written.
+  and `build.py --verify-mermaid` checks that every label is drawn in its own
+  element and reads as written.
   Two things Mermaid cannot show are rejected:
   - `<` in a **title**: Mermaid drops `<word>` from a diagram title as an HTML
     tag and prints any other `<` as `&lt;`;

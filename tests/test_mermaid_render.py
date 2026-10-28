@@ -10,12 +10,14 @@ Needs:
 - ``DIAGRAM_KIT_MERMAID_JS=/path/to/mermaid/dist/mermaid.min.js`` (npm ``mermaid@12.2.0``),
 - a Chromium: ``DIAGRAM_KIT_CHROMIUM=/path/to/chrome``, or one from ``playwright install chromium``.
 
-Set ``DIAGRAM_KIT_MERMAID_VERSION`` to run against another bundle (e.g. 11.17.2). See README
+Set ``DIAGRAM_KIT_MERMAID_VERSION`` to run against another bundle (e.g. 11.17.2), and
+``DIAGRAM_KIT_MERMAID_VERSION_OK`` to the same value so the CLI gate accepts it. See README
 "Checking Mermaid before a commit".
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 
@@ -23,7 +25,7 @@ import pytest
 
 from diagram_kit.cli import generate
 from diagram_kit.mermaid_check import GateUnavailable, MermaidRenderer, check, map_texts, setup_problem
-from diagram_kit.spec import RESERVED_FILE
+from diagram_kit.spec import RESERVED_FILE, Block, Branch, Message
 
 MERMAID_JS = os.environ.get("DIAGRAM_KIT_MERMAID_JS")
 CHROMIUM = os.environ.get("DIAGRAM_KIT_CHROMIUM")
@@ -138,6 +140,92 @@ def test_gate_checks_every_text_position(renderer, monkeypatch, kind):
     monkeypatch.setattr(mermaid, "_escape", lambda s, table: s)
     reported = sorted({p.split(": expected")[0] for p in check(renderer, spec) if ": expected" in p})
     assert reported == sorted(paths)
+
+
+# Kit defects that drop, move, repeat or reorder a label in the .mmd, whatever its
+# characters: the token rendering comes from the same (defective) kit, so only
+# placement, which is derived from the spec, can catch them (the fourth review's
+# mutants mA-mD passed the gate before it existed).
+
+
+def _messages(items):
+    for it in items:
+        if isinstance(it, Message):
+            yield it
+        else:
+            for br in it.branches:
+                yield from _messages(br.items)
+
+
+def _sequence_defect(spec, fn):
+    def walk(items):
+        out = []
+        for it in items:
+            if isinstance(it, Message):
+                out.append(fn(it))
+            else:
+                out.append(Block(it.kind, tuple(Branch(br.label, walk(br.items)) for br in it.branches)))
+        return tuple(out)
+
+    return dataclasses.replace(spec, items=walk(spec.items))
+
+
+def _swap_first_two_messages(spec):
+    a, b = list(_messages(spec.items))[:2]
+    swap = {id(a): b.label, id(b): a.label}
+    return _sequence_defect(spec, lambda m: dataclasses.replace(m, label=swap.get(id(m), m.label)))
+
+
+def _rotate_node_labels(spec):
+    labels = [n.label for n in spec.nodes]
+    return dataclasses.replace(spec, nodes=tuple(dataclasses.replace(n, label=labels[(i + 1) % len(labels)])
+                                                 for i, n in enumerate(spec.nodes)))
+
+
+def _swap_relation_labels(spec):
+    r = list(spec.relations)
+    r[0], r[1] = dataclasses.replace(r[0], label=r[1].label), dataclasses.replace(r[1], label=r[0].label)
+    return dataclasses.replace(spec, relations=tuple(r))
+
+
+DEFECTS = {
+    "edge_labels_dropped": ("iv_forecast_pipeline", "flow_mermaid",
+                            lambda s: dataclasses.replace(s, edges=tuple(dataclasses.replace(e, label=None)
+                                                                         for e in s.edges)),
+                            "edges[0].label: 'daily CSV' is not drawn at all (expected at edge=L_cboe_raw_0)"),
+    "node_labels_rotated": ("iv_forecast_pipeline", "flow_mermaid", _rotate_node_labels,
+                            "nodes[0].label: 'CBOE CSV' is not drawn where it belongs"),
+    "sublabels_dropped": ("iv_forecast_pipeline", "flow_mermaid",
+                          lambda s: dataclasses.replace(s, nodes=tuple(dataclasses.replace(n, sublabel=None)
+                                                                       for n in s.nodes)),
+                          "nodes[0].sublabel: 'EOD option chains' is not drawn at all"),
+    "label_repeated": ("t", "flow_mermaid",
+                       lambda s: dataclasses.replace(s, nodes=(dataclasses.replace(s.nodes[0], sublabel=s.nodes[0].label),)),
+                       "nodes[0].label: 'A' is drawn 2 times, expected 1"),
+    "notes_dropped": ("backtester_daily_loop", "sequence_mermaid",
+                      lambda s: _sequence_defect(s, lambda m: dataclasses.replace(m, note=None)),
+                      "messages[0].messages[3].note: 'marks at mid = (bid + ask) / 2' is not drawn at all"),
+    "messages_swapped": ("backtester_daily_loop", "sequence_mermaid", _swap_first_two_messages,
+                         "messages[0].messages[0].label ...: drawn out of spec order: "),
+    "relation_labels_swapped": ("options_backtester_erd", "erd_mermaid", _swap_relation_labels,
+                                "relations[0].label: 'opens' is not drawn where it belongs"),
+}
+
+
+@pytest.mark.parametrize("defect", sorted(DEFECTS))
+def test_gate_reports_a_label_the_kit_drops_moves_repeats_or_reorders(renderer, all_specs, monkeypatch, defect):
+    from diagram_kit import mermaid_check
+
+    from .conftest import spec_from
+
+    name, emitter, fn, expected = DEFECTS[defect]
+    spec = spec_from("kind: flow\ntitle: t\nnodes: [{id: a, label: A, type: ui}]\n") if name == "t" \
+        else next(s for s in all_specs if s.name == name)
+    real = getattr(mermaid_check, emitter)
+    assert check(renderer, spec) == []  # the control: without the defect it passes
+    monkeypatch.setattr(mermaid_check, emitter, lambda s: real(fn(s)))
+    problems = check(renderer, spec)
+    assert any(p.startswith(expected) for p in problems), problems
 
 
 def test_wrapped_block_label_reads_as_its_words(renderer):

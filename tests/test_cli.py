@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -134,12 +135,21 @@ def test_runs_from_any_cwd_when_vendored(tmp_path):
 
 
 # ------------------------------------------------------------ stale outputs
-# The build lists what it wrote in .diagram-kit-manifest.json and deletes the
-# listed files no spec produces any more; it never deletes anything unlisted.
+# The build lists what it wrote in .diagram-kit-manifest.json, with each file's
+# sha256, and deletes a listed file no spec produces any more only while it still
+# has that hash; it never deletes anything unlisted.
 
 
 def manifest(out: Path) -> list[str]:
-    return json.loads((out / ".diagram-kit-manifest.json").read_text())["files"]
+    return sorted(json.loads((out / ".diagram-kit-manifest.json").read_text())["files"])
+
+
+def add_to_manifest(out: Path, *names: str) -> None:
+    """List files as the kit would have: with the sha256 of their current bytes."""
+    m = out / ".diagram-kit-manifest.json"
+    data = json.loads(m.read_text())
+    data["files"].update({n: hashlib.sha256((out / n).read_bytes()).hexdigest() for n in names})
+    m.write_text(json.dumps(data))
 
 
 
@@ -197,7 +207,10 @@ def test_manifest_cannot_point_outside_out_or_at_non_outputs(built, tmp_path):
     victim.write_text("keep")
     (out / "notes.md").write_text("keep")
     m = out / ".diagram-kit-manifest.json"
-    m.write_text(json.dumps({"files": json.loads(m.read_text())["files"] + [str(victim), "../victim.svg", "notes.md"]}))
+    data = json.loads(m.read_text())
+    keep = hashlib.sha256(b"keep").hexdigest()  # the right hash: only the name filter stops these
+    data["files"].update({str(victim): keep, "../victim.svg": keep, "notes.md": keep})
+    m.write_text(json.dumps(data))
     assert run(str(specs), "--out", str(out)).returncode == 0
     assert victim.read_text() == "keep" and (out / "notes.md").read_text() == "keep"
 
@@ -227,10 +240,9 @@ def test_check_reports_a_stale_png(built):
 
 def test_only_build_removes_only_that_specs_stale_files(built):
     specs, out = built
-    m = out / ".diagram-kit-manifest.json"
     (out / "backtester_daily_loop.drawio").write_text("x")
     (out / "other_gone.svg").write_text("x")
-    m.write_text(json.dumps({"files": manifest(out) + ["backtester_daily_loop.drawio", "other_gone.svg"]}))
+    add_to_manifest(out, "backtester_daily_loop.drawio", "other_gone.svg")
     res = run(str(specs), "--out", str(out), "--only", "backtester_daily_loop")
     assert res.returncode == 0, res.stderr
     assert not (out / "backtester_daily_loop.drawio").exists() and (out / "other_gone.svg").exists()
@@ -297,7 +309,7 @@ def test_verify_mermaid_fails_with_a_per_label_diff_when_an_escape_is_missing(tm
     assert "1 of 1 spec(s) do not render as written" in res.stderr
     assert "    - nodes[0].label: expected 'fees $$ and slippage $$'; Mermaid shows " in res.stderr
     res = subprocess.run([sys.executable, str(BUILD), str(specs), "--verify-mermaid"], capture_output=True, text=True)
-    assert res.returncode == 0 and "1 spec(s) render with every label as written" in res.stdout, res.stderr
+    assert res.returncode == 0 and "1 spec(s) checked: every title, label, sublabel" in res.stdout, res.stderr
 
 
 # ------------------------------------------------------------- symlinks and odd paths
@@ -332,7 +344,9 @@ def test_a_listed_stale_symlink_is_left_for_removal_by_hand(built, tmp_path):
     outside.write_text("keep")
     (out / "gone.svg").symlink_to(outside)
     m = out / ".diagram-kit-manifest.json"
-    m.write_text(json.dumps({"files": manifest(out) + ["gone.svg"]}))
+    data = json.loads(m.read_text())
+    data["files"]["gone.svg"] = hashlib.sha256(b"keep").hexdigest()  # the target's hash: still not deleted
+    m.write_text(json.dumps(data))
     # listed, but a symlink: the build will not remove it, so --check asks for it by hand
     res = run(str(specs), "--out", str(out), "--check")
     assert f"stale    {out / 'gone.svg'} (not written by the kit: remove it by hand)" in res.stderr
@@ -386,3 +400,163 @@ def test_manifest_lists_only_files_that_exist(built):
     assert run(str(specs), "--out", str(out), "--no-png").returncode == 0
     assert "backtester_daily_loop.png" not in manifest(out)
     assert manifest(out) == outputs(out)
+
+
+# ------------------------------------------------- files the kit did not write
+# The fourth review: the build deleted a stale output the user had replaced with
+# their own file, overwrote a user's file that happened to have an output's name,
+# and wrote through a hard link. Deletion and overwriting now need the bytes to
+# hash to what the manifest recorded; everything is written by rename.
+
+
+def test_a_stale_file_changed_since_the_kit_wrote_it_is_kept_and_reported(tmp_path):
+    """The hub's reproduction: build old and keep, delete old.yaml, put your own notes in out/old.svg, build."""
+    specs, out = tmp_path / "specs", tmp_path / "out"
+    specs.mkdir()
+    for name in ("old", "keep"):
+        (specs / f"{name}.yaml").write_text(f"kind: flow\ntitle: {name}\nnodes:\n  - {{id: a, label: A, type: ui}}\n")
+    assert run(str(specs), "--out", str(out), "--no-png").returncode == 0
+    (specs / "old.yaml").unlink()
+    (out / "old.svg").write_text("MY OWN NOTES")
+    res = run(str(specs), "--out", str(out), "--no-png", "--check")
+    assert res.returncode == 1
+    assert f"stale    {out / 'old.svg'} (changed since the kit wrote it; remove it by hand if unwanted)" in res.stderr
+    assert f"stale    {out / 'old.mmd'}\n" in res.stderr  # unchanged: the build removes it
+    res = run(str(specs), "--out", str(out), "--no-png")
+    assert res.returncode == 0, res.stderr
+    assert (out / "old.svg").read_text() == "MY OWN NOTES"
+    assert f"kept {out / 'old.svg'}: no spec produces it any more, but it changed since the kit wrote it" in res.stdout
+    assert f"removed {out / 'old.mmd'}" in res.stdout and not (out / "old.mmd").exists()
+    assert "old.svg" not in manifest(out)  # no longer the kit's: a later build leaves it alone too
+    assert run(str(specs), "--out", str(out), "--no-png").returncode == 0
+    assert (out / "old.svg").read_text() == "MY OWN NOTES"
+
+
+def test_a_manifest_without_hashes_never_deletes(built):
+    """A manifest written before hashes were recorded (a list of names): its files are unverified, so kept."""
+    specs, out = built
+    (out / "gone.svg").write_bytes((out / "iv_forecast_pipeline.svg").read_bytes())
+    (out / ".diagram-kit-manifest.json").write_text(json.dumps({"files": manifest(out) + ["gone.svg"]}))
+    res = run(str(specs), "--out", str(out), "--check")
+    assert f"stale    {out / 'gone.svg'} (listed without a hash by an older kit; remove it by hand if unwanted)" \
+        in res.stderr
+    res = run(str(specs), "--out", str(out))
+    assert res.returncode == 0, res.stderr
+    assert (out / "gone.svg").exists() and f"kept {out / 'gone.svg'}" in res.stdout
+    data = json.loads((out / ".diagram-kit-manifest.json").read_text())["files"]
+    # the current outputs are byte-identical to what the build produces, so they are listed again, with hashes
+    assert sorted(data) == [n for n in outputs(out) if n != "gone.svg"]
+    assert all(len(h) == 64 for h in data.values())
+
+
+@pytest.mark.parametrize("how", ["unlisted", "edited", "listed_without_hash"])
+def test_build_refuses_to_overwrite_a_file_the_kit_cannot_show_it_wrote(built, how):
+    specs, out = built
+    target = out / "iv_forecast_pipeline.svg"
+    if how == "unlisted":  # a user's file that happens to have an output's name
+        data = json.loads((out / ".diagram-kit-manifest.json").read_text())
+        del data["files"]["iv_forecast_pipeline.svg"]
+        (out / ".diagram-kit-manifest.json").write_text(json.dumps(data))
+        why = "not in the manifest: the kit did not write it"
+    elif how == "edited":
+        why = "changed since the kit wrote it"
+    else:
+        (out / ".diagram-kit-manifest.json").write_text(json.dumps({"files": manifest(out)}))
+        why = "listed without a hash (a manifest from an older kit): cannot tell it is the kit's"
+    target.write_text("<svg>MINE</svg>")
+    (out / "backtester_daily_loop.mmd").unlink()
+    before = (out / ".diagram-kit-manifest.json").read_bytes()
+    res = run(str(specs), "--out", str(out))
+    assert res.returncode == 2 and "Traceback" not in res.stderr
+    assert "refusing to overwrite 1 file(s) the kit cannot show it wrote (nothing was written)" in res.stderr
+    assert f"  {target}: {why}" in res.stderr and "--overwrite" in res.stderr
+    assert target.read_text() == "<svg>MINE</svg>"
+    assert not (out / "backtester_daily_loop.mmd").exists()  # nothing was written
+    assert (out / ".diagram-kit-manifest.json").read_bytes() == before
+    res = run(str(specs), "--out", str(out), "--check")
+    assert f"differs  {target} ({why}: the build refuses to overwrite it" in res.stderr
+    assert f"rm -- {target}" not in res.stderr
+    res = run(str(specs), "--out", str(out), "--overwrite")
+    assert res.returncode == 0, res.stderr
+    assert target.read_text() != "<svg>MINE</svg>" and "iv_forecast_pipeline.svg" in manifest(out)
+    assert run(str(specs), "--out", str(out), "--check").returncode == 0
+
+
+def test_outputs_replace_hard_links_instead_of_writing_through(built, tmp_path):
+    specs, out = built
+    target = out / "iv_forecast_pipeline.mmd"
+    precious = tmp_path / "precious.mmd"
+    os.link(target, precious)  # same inode, same bytes: the manifest's hash still matches
+    old = precious.read_bytes()
+    spec = specs / "iv_forecast_pipeline.yaml"
+    spec.write_text(spec.read_text().replace("title: ", "title: Renamed ", 1))
+    res = run(str(specs), "--out", str(out), "--no-png")
+    assert res.returncode == 0, res.stderr
+    assert precious.read_bytes() == old and target.read_bytes() != old
+    assert target.stat().st_nlink == 1
+    umask = os.umask(0)
+    os.umask(umask)
+    assert target.stat().st_mode & 0o777 == 0o666 & ~umask
+    assert not list(out.glob(".*.tmp"))
+
+
+def test_out_that_is_a_symlink_is_refused(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+    for extra in ([], ["--check"]):
+        res = run(str(EXAMPLE_SPECS), "--out", str(tmp_path / "link"), *extra)
+        assert res.returncode == 2 and "Traceback" not in res.stderr, res.stderr
+        assert f"error: --out {tmp_path / 'link'} is a symlink; pass the directory it points to ({real})" in res.stderr
+    assert list(real.iterdir()) == []
+
+
+# --------------------------------------------- the gate with a stand-in bundle
+# Needs Playwright and a Chromium, not the real Mermaid bundle.
+
+FAKE_MERMAID = ("window.mermaid = {initialize() {}, async parse() {}, async render(id, text) {"
+                "return {svg: `<svg id=\"${id}\"><text>v9.9.9</text></svg>`}; }};")
+
+
+@pytest.fixture(scope="module")
+def chromium(tmp_path_factory):
+    from diagram_kit.mermaid_check import GateUnavailable, MermaidRenderer
+
+    js = tmp_path_factory.mktemp("fake") / "fake.js"
+    js.write_text(FAKE_MERMAID)
+    try:
+        with MermaidRenderer(str(js), os.environ.get("DIAGRAM_KIT_CHROMIUM")):
+            pass
+    except GateUnavailable as exc:
+        pytest.skip(str(exc).splitlines()[0])
+
+
+def gate(bundle: Path, **env: str) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k != "DIAGRAM_KIT_MERMAID_VERSION_OK"} | env
+    env["DIAGRAM_KIT_MERMAID_JS"] = str(bundle)
+    return subprocess.run([sys.executable, str(BUILD), str(EXAMPLE_SPECS), "--verify-mermaid"],
+                          capture_output=True, text=True, env=env)
+
+
+def test_a_bundle_that_is_not_mermaid_12_2_0_exits_2_unless_accepted(chromium, tmp_path):
+    bundle = tmp_path / "mermaid.min.js"
+    bundle.write_text(FAKE_MERMAID)
+    res = gate(bundle)
+    assert res.returncode == 2 and "Traceback" not in res.stderr, res.stderr
+    assert "is Mermaid 9.9.9, but GitHub renders with 12.2.0" in res.stderr
+    assert "DIAGRAM_KIT_MERMAID_VERSION_OK=9.9.9" in res.stderr and "npm install" in res.stderr
+    res = gate(bundle, DIAGRAM_KIT_MERMAID_VERSION_OK="9.9.9")
+    # accepted; the stand-in draws no labels at all, which the gate reports
+    assert res.returncode == 1, res.stderr
+    assert "mermaid 9.9.9 (GitHub renders with 12.2.0): 3 of 3 spec(s) do not render as written" in res.stderr
+    assert "    - title: 'Backtester daily loop' is not drawn at all (expected at role=title)" in res.stderr
+
+
+@pytest.mark.parametrize("text", ["", "var x = 1;", "throw new Error('boom');"], ids=["empty", "not_mermaid", "throws"])
+def test_a_bundle_that_does_not_load_exits_2_with_install_steps(chromium, tmp_path, text):
+    bundle = tmp_path / "mermaid.min.js"
+    bundle.write_text(text)
+    res = gate(bundle)
+    assert res.returncode == 2 and "Traceback" not in res.stderr, res.stderr
+    assert f"error: DIAGRAM_KIT_MERMAID_JS={bundle} did not load as Mermaid: " in res.stderr
+    assert "npm install --prefix" in res.stderr

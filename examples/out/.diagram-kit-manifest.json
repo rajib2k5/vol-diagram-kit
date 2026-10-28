@@ -1,18 +1,18 @@
 {
- "_comment": "Files written by vol-diagram-kit's build.py. A build deletes the listed files no spec produces any more, and nothing else. Do not edit.",
- "files": [
-  "backtester_daily_loop.mmd",
-  "backtester_daily_loop.png",
-  "backtester_daily_loop.svg",
-  "iv_forecast_pipeline.drawio",
-  "iv_forecast_pipeline.lucid.xml",
-  "iv_forecast_pipeline.mmd",
-  "iv_forecast_pipeline.png",
-  "iv_forecast_pipeline.svg",
-  "options_backtester_erd.drawio",
-  "options_backtester_erd.lucid.xml",
-  "options_backtester_erd.mmd",
-  "options_backtester_erd.png",
-  "options_backtester_erd.svg"
- ]
+ "_comment": "Files written by vol-diagram-kit's build.py, with the sha256 of the bytes it wrote. A build deletes a listed file no spec produces any more only while it still has that hash, and nothing else. Do not edit.",
+ "files": {
+  "backtester_daily_loop.mmd": "cef326ce02aaef01afb160f3ef087cd356c15f0134910639a0878a5e7e87924a",
+  "backtester_daily_loop.png": "f64281c37e3bc108456575daed679077f2652696fe1335dd7a6beb6fcf3dcc86",
+  "backtester_daily_loop.svg": "31a6453187dac845c9e7b14a29064aedfda30b0697200406411e3f11318ec169",
+  "iv_forecast_pipeline.drawio": "b9fd3d44559fce0ba14168ab7a1c619d43a4d75c71a9de2eb7dab344b603c4c6",
+  "iv_forecast_pipeline.lucid.xml": "64dc9890b4824aa67a0cd9c5f4d1fb96fb58f416808e38527672e9c43c8041c9",
+  "iv_forecast_pipeline.mmd": "3cd685bc0b4b1c5111374c5bc7c65422ab36c7260f5b9ad81bb5716b879ed8da",
+  "iv_forecast_pipeline.png": "b9c62c3ee2520995b25144d4f17f6ebd8644d3ddb8079f3fde5815ff2b88fd11",
+  "iv_forecast_pipeline.svg": "92f23bfa64b39b2b8ab15730e0914c8412a5a8bd4139219ae42a572642db5680",
+  "options_backtester_erd.drawio": "7560f9a484d4c4fc68a53ed659648c0e2f26741ea18523142368dbd3a6dc9160",
+  "options_backtester_erd.lucid.xml": "09c60325110f3807a9c42d223f5f85c2a51d1c5591aa3fdf1d8d21b2b8a18b51",
+  "options_backtester_erd.mmd": "860e6bc3a30a268340f12ae2a0cd50fef46c6755c5ea5b9a8e8d3847452cf52c",
+  "options_backtester_erd.png": "670441c0059970cada3b1be6949b2d9b6874b8629a234ee6e0c3c70613b243ae",
+  "options_backtester_erd.svg": "98b17cd262546662c30059dd8ddedc27529bbeb2346905757fe9b5c34dfcc0ce"
+ }
 }
