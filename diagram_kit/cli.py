@@ -88,7 +88,7 @@ def read_manifest(out_dir: Path) -> list[str]:
     file that is not a diagram output."""
     path = out_dir / MANIFEST
     try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() and not _blocked(path) else {}
     except (OSError, ValueError):
         return []
     files = data.get("files") if isinstance(data, dict) else None
@@ -104,14 +104,21 @@ def manifest_text(names) -> str:
 
 
 def _blocked(path: Path) -> bool:
-    return path.exists() and not path.is_file()
+    """Something other than a regular file (a directory, a symlink, even a dangling one) is in the way.
+
+    The kit never reads, writes or deletes through a symlink, so it cannot touch
+    a file outside --out."""
+    return path.is_symlink() or (path.exists() and not path.is_file())
 
 
 def write_outputs(files: dict[str, bytes], out_dir: Path) -> list[Path]:
+    if out_dir.exists() and not out_dir.is_dir():
+        raise OutputBlocked(f"--out {out_dir} is not a directory")
     out_dir.mkdir(parents=True, exist_ok=True)
     blocked = [out_dir / name for name in files if _blocked(out_dir / name)]
     if blocked:
-        raise OutputBlocked(f"{blocked[0]} is not a regular file; remove it (rm -r {shlex.quote(str(blocked[0]))})")
+        raise OutputBlocked(f"{blocked[0]} is not a regular file (or is a symlink); remove it "
+                            f"(rm -r -- {shlex.quote(str(blocked[0]))})")
     written = []
     for name, data in files.items():
         path = out_dir / name
@@ -130,8 +137,10 @@ def build(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
     or removed; the manifest keeps every other spec's entries.
     """
     files = generate(specs, png, renderer)
+    if out_dir.exists() and not out_dir.is_dir():
+        raise OutputBlocked(f"--out {out_dir} is not a directory")
     if _blocked(out_dir / MANIFEST):
-        raise OutputBlocked(f"{out_dir / MANIFEST} is not a regular file; remove it")
+        raise OutputBlocked(f"{out_dir / MANIFEST} is not a regular file (or is a symlink); remove it")
     produced = {name for spec in specs for name in output_names(spec)}
     owned = read_manifest(out_dir)
     stale = [n for n in owned if n not in produced and (only is None or _stem_and_ext(n)[0] == only)]
@@ -139,7 +148,7 @@ def build(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
     removed = []
     for name in stale:
         path = out_dir / name
-        if path.is_file() and not path.is_symlink():  # anything else in its place is not the kit's
+        if not _blocked(path) and path.is_file():  # anything else in its place is not the kit's
             path.unlink()
             removed.append(path)
     keep = (set(owned) - set(stale)) | set(files)
@@ -159,7 +168,7 @@ class Problem:
     def __str__(self) -> str:
         note = ""
         if self.kind == "blocked":
-            note = " (not a regular file: remove it by hand)"
+            note = " (not a regular file, or a symlink: remove it by hand)"
         elif self.by_hand:
             note = " (not written by the kit: remove it by hand)"
         return f"{self.kind:8} {self.path}{note}"
@@ -180,20 +189,24 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
         tmp_dir = Path(tmp)
         write_outputs(generate(specs, png, renderer), tmp_dir)
         expected = {p.name: p.read_bytes() for p in sorted(tmp_dir.iterdir())}
+    if out_dir.exists() and not out_dir.is_dir():
+        raise OutputBlocked(f"--out {out_dir} is not a directory")
     for name, data in expected.items():
         have = out_dir / name
-        if not have.exists():
-            problems.append(Problem("missing", have))
-        elif not have.is_file():
+        if _blocked(have):
             problems.append(Problem("blocked", have, by_hand=True))
+        elif not have.exists():
+            problems.append(Problem("missing", have))
         elif have.read_bytes() != data:
             problems.append(Problem("differs", have))
+    if _blocked(out_dir / MANIFEST):
+        problems.append(Problem("blocked", out_dir / MANIFEST, by_hand=True))
     if out_dir.is_dir():
         known = {s.name: s.kind for s in specs}
         owned = set(read_manifest(out_dir))
         for p in sorted(out_dir.iterdir()):
             parsed = _stem_and_ext(p.name)
-            if parsed is None or p.name in expected or not p.is_file():
+            if parsed is None or p.name in expected or not (p.is_file() or p.is_symlink()):
                 continue
             stem, ext = parsed
             if ext == ".png" and not png:
@@ -201,15 +214,15 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
             if only is not None and stem != only:
                 continue
             if stem not in known or ext not in EXTENSIONS[known[stem]]:
-                problems.append(Problem("stale", p, by_hand=p.name not in owned or p.is_symlink()))
+                problems.append(Problem("stale", p, by_hand=p.name not in owned or _blocked(p)))
     return problems
 
 
 def remedy(problems: list[Problem], argv0: str, args: argparse.Namespace) -> list[str]:
     """Commands that make --check pass again: removals the build will not do, then the build."""
     q = shlex.quote
-    lines = [f"rm -r {q(str(p.path))}" if p.kind == "blocked" else f"rm {q(str(p.path))}"
-             for p in problems if p.by_hand]
+    lines = [f"rm -r -- {q(str(p.path))}" if p.kind == "blocked" and not p.path.is_symlink()
+             else f"rm -- {q(str(p.path))}" for p in problems if p.by_hand]
     cmd = ["python", argv0, str(args.specs_dir), "--out", str(args.out)]
     if args.no_png:
         cmd.append("--no-png")

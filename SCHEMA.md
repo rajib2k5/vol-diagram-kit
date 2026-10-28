@@ -64,6 +64,10 @@ Three kinds exist: `flow`, `erd`, `sequence`. Every kind accepts:
     internal marker for `;` and is replaced in the finished SVG whatever the
     escaping (sequence diagram text can show it; the subtitle is not in the
     `.mmd`, so it can too). Write `¶ ß`.
+
+  Mermaid wraps a sequence `loop`/`opt`/`alt` label to its block's width and
+  breaks a word that does not fit with a `-`; that depends on the layout, so
+  validation cannot see it, but `--verify-mermaid` reports it. Use shorter words.
 - **Characters**: only characters the bundled PNG font can draw are accepted
   (printable ASCII, Latin-1, and `– — ‘ ’ “ ” • … → ← ↑ ↓ ↔ × · ≤ ≥ ≈ ≠ ± σ μ Δ Σ β θ λ ρ τ ν ω √ ∞ €`).
   Anything else (emoji, `⇒`, CJK) is rejected with the offending code point.

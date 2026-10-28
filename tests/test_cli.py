@@ -185,7 +185,7 @@ def test_build_never_deletes_files_the_manifest_does_not_list(built):
     res = run(str(specs), "--out", str(out), "--check")
     assert res.returncode == 1
     assert f"stale    {out / 'old_diagram.drawio'} (not written by the kit: remove it by hand)" in res.stderr
-    assert f"run: rm {out / 'old_diagram.drawio'}" in res.stderr
+    assert f"run: rm -- {out / 'old_diagram.drawio'}" in res.stderr
     run_remedy(res.stderr)
     assert run(str(specs), "--out", str(out), "--check").returncode == 0
     assert (out / "notes.md").exists()
@@ -244,7 +244,8 @@ def test_a_directory_where_an_output_goes_is_reported_not_read(built):
     (out / "old.svg").mkdir()  # an unlisted directory with an output-like name: skipped
     res = run(str(specs), "--out", str(out), "--check")
     assert res.returncode == 1 and "Traceback" not in res.stderr
-    assert f"blocked  {out / 'options_backtester_erd.svg'} (not a regular file: remove it by hand)" in res.stderr
+    assert f"blocked  {out / 'options_backtester_erd.svg'} (not a regular file, or a symlink: remove it by hand)" \
+        in res.stderr
     assert "old.svg" not in res.stderr
     res = run(str(specs), "--out", str(out))
     assert res.returncode == 2 and "Traceback" not in res.stderr
@@ -294,6 +295,94 @@ def test_verify_mermaid_fails_with_a_per_label_diff_when_an_escape_is_missing(tm
     res = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
     assert res.returncode == 1, res.stderr
     assert "1 of 1 spec(s) do not render as written" in res.stderr
-    assert "    - nodes[0].label: expected 'fees $$ and slippage $$' 1x, rendered 0x" in res.stderr
+    assert "    - nodes[0].label: expected 'fees $$ and slippage $$'; Mermaid shows " in res.stderr
     res = subprocess.run([sys.executable, str(BUILD), str(specs), "--verify-mermaid"], capture_output=True, text=True)
     assert res.returncode == 0 and "1 spec(s) render with every label as written" in res.stdout, res.stderr
+
+
+# ------------------------------------------------------------- symlinks and odd paths
+# The kit never reads, writes or deletes through a symlink, so it cannot touch a
+# file outside --out; a symlink where an output goes is reported for removal.
+
+
+@pytest.mark.parametrize("dangling", [False, True])
+def test_a_symlink_where_an_output_goes_is_never_written_through(built, tmp_path, dangling):
+    specs, out = built
+    outside = tmp_path / "outside.svg"
+    if not dangling:
+        outside.write_text("keep")
+    target = out / "options_backtester_erd.svg"
+    target.unlink()
+    target.symlink_to(outside)
+    res = run(str(specs), "--out", str(out))
+    assert res.returncode == 2 and "Traceback" not in res.stderr and "is not a regular file" in res.stderr
+    assert outside.read_text() == "keep" if not dangling else not outside.exists()
+    res = run(str(specs), "--out", str(out), "--check")
+    assert res.returncode == 1 and "Traceback" not in res.stderr
+    assert f"blocked  {target} (not a regular file, or a symlink: remove it by hand)" in res.stderr
+    assert f"run: rm -- {target}" in res.stderr
+    run_remedy(res.stderr)
+    assert run(str(specs), "--out", str(out), "--check").returncode == 0
+    assert outside.read_text() == "keep" if not dangling else not outside.exists()
+
+
+def test_a_listed_stale_symlink_is_left_for_removal_by_hand(built, tmp_path):
+    specs, out = built
+    outside = tmp_path / "gone.svg"
+    outside.write_text("keep")
+    (out / "gone.svg").symlink_to(outside)
+    m = out / ".diagram-kit-manifest.json"
+    m.write_text(json.dumps({"files": manifest(out) + ["gone.svg"]}))
+    # listed, but a symlink: the build will not remove it, so --check asks for it by hand
+    res = run(str(specs), "--out", str(out), "--check")
+    assert f"stale    {out / 'gone.svg'} (not written by the kit: remove it by hand)" in res.stderr
+    assert run(str(specs), "--out", str(out)).returncode == 0
+    assert (out / "gone.svg").is_symlink() and outside.read_text() == "keep"
+    assert "gone.svg" not in manifest(out)  # only regular files the kit wrote are listed
+    run_remedy(res.stderr)
+    assert run(str(specs), "--out", str(out), "--check").returncode == 0 and outside.read_text() == "keep"
+
+
+def test_a_symlinked_manifest_is_not_read_or_written(built, tmp_path):
+    specs, out = built
+    outside = tmp_path / "settings.json"
+    outside.write_text('{"files": ["iv_forecast_pipeline.svg"]}')
+    m = out / ".diagram-kit-manifest.json"
+    m.unlink()
+    m.symlink_to(outside)
+    (specs / "iv_forecast_pipeline.yaml").unlink()
+    res = run(str(specs), "--out", str(out))
+    assert res.returncode == 2 and "is not a regular file (or is a symlink)" in res.stderr
+    assert outside.read_text() == '{"files": ["iv_forecast_pipeline.svg"]}'
+    assert (out / "iv_forecast_pipeline.svg").exists()
+    res = run(str(specs), "--out", str(out), "--check")
+    assert f"blocked  {m} (not a regular file, or a symlink: remove it by hand)" in res.stderr
+
+
+def test_out_that_is_a_file_is_an_error_not_a_crash(tmp_path):
+    out = tmp_path / "out"
+    out.write_text("not a directory")
+    for extra in ([], ["--check"]):
+        res = run(str(EXAMPLE_SPECS), "--out", str(out), *extra)
+        assert res.returncode == 2 and "Traceback" not in res.stderr, res.stderr
+        assert f"error: --out {out} is not a directory" in res.stderr
+
+
+def test_remedy_for_a_file_name_starting_with_a_dash(built):
+    specs, out = built
+    (out / "-x.svg").write_text("x")
+    res = subprocess.run([sys.executable, str(BUILD), str(specs), "--out", ".", "--check"],
+                         capture_output=True, text=True, cwd=out)
+    assert res.returncode == 1 and "run: rm -- -x.svg" in res.stderr
+    run_remedy(res.stderr, cwd=out)
+    assert not (out / "-x.svg").exists()
+    assert run(str(specs), "--out", str(out), "--check").returncode == 0
+
+
+def test_manifest_lists_only_files_that_exist(built):
+    """A PNG deleted by hand and not rebuilt (--no-png) drops out of the manifest instead of being listed."""
+    specs, out = built
+    (out / "backtester_daily_loop.png").unlink()
+    assert run(str(specs), "--out", str(out), "--no-png").returncode == 0
+    assert "backtester_daily_loop.png" not in manifest(out)
+    assert manifest(out) == outputs(out)

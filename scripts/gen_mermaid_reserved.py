@@ -6,11 +6,12 @@
 
 Every candidate word, in three casings (lower, Capitalised, UPPER), is put in
 every id position (flow node, flow lane, ERD entity, ERD column name, ERD column
-type, sequence participant). The kit's own Mermaid emitter writes the file with
-validation bypassed, and each bundle parses and renders it in headless Chromium
-(the render gate's GitHub config). A word fails a position when any bundle
-cannot parse or render the file, or loses any text the file carries (the
-gate's ``label_problems``).
+type, sequence participant), in every role that position has (a node or entity
+both sends and receives, a column is referenced and referencing). The kit's own
+Mermaid emitter writes the file with validation bypassed, and each bundle
+parses and renders it in headless Chromium (the render gate's GitHub config).
+A word fails a position when any bundle cannot parse or render the file, or
+shows any text the file carries other than as written (the gate's ``check``).
 
 Output, per position: ``reject_any_case`` (all three casings failed: the word
 is rejected in any case) and ``reject_exact`` (only some casings failed: just
@@ -36,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 
 from diagram_kit import mermaid as M  # noqa: E402
 from diagram_kit import spec as S  # noqa: E402
-from diagram_kit.mermaid_check import MermaidRenderer, label_problems  # noqa: E402
+from diagram_kit.mermaid_check import MermaidRenderer, check  # noqa: E402
 
 OUT = ROOT / "diagram_kit" / "mermaid_reserved.json"
 POSITIONS = ("flow_node", "flow_lane", "erd_entity", "erd_colname", "erd_coltype", "seq_participant")
@@ -97,16 +98,23 @@ def held_out(w: str) -> list[str]:
 
 
 def emit(pos: str, w: str):
-    """(mmd, spec model) for word w in position pos, validation bypassed."""
+    """(mmd, spec model) for word w in position pos, validation bypassed.
+
+    The word takes every role its position has: a node or entity both sends and
+    receives an edge / relation, a column is both referenced and referencing, a
+    participant sends, receives, calls itself and carries a note.
+    """
     if pos == "flow_node":
-        sp = S.FlowSpec("p", "T", None, "LR", (), (S.Node(w, "NodeW", None, "external", None),
-                                                   S.Node("b2", "NodeB", None, "store", None)),
-                        (S.Edge(w, "b2", "EdgeL", "data"),), True)
+        sp = S.FlowSpec("p", "T", None, "LR", (), (S.Node(w, "NodeW", "SubW", "external", None),
+                                                   S.Node("b2", "NodeB", None, "store", None),
+                                                   S.Node("b3", "NodeC", None, "process", None)),
+                        (S.Edge(w, "b2", "EdgeL", "data"), S.Edge("b3", w, "EdgeM", "control")), True)
         return M.flow_mermaid(sp), sp
     if pos == "flow_lane":
-        sp = S.FlowSpec("p", "T", None, "LR", (S.Lane(w, "LaneW"),),
-                        (S.Node("a1", "NodeA", None, "process", w), S.Node("a2", "NodeB", None, "store", w)),
-                        (S.Edge("a1", "a2", "EdgeL", "data"),), True)
+        sp = S.FlowSpec("p", "T", None, "LR", (S.Lane(w, "LaneW"), S.Lane("lz", "LaneZ")),
+                        (S.Node("a1", "NodeA", None, "process", w), S.Node("a2", "NodeB", None, "store", w),
+                         S.Node("a3", "NodeC", None, "ui", "lz")),
+                        (S.Edge("a1", "a2", "EdgeL", "data"), S.Edge("a2", "a3", "EdgeM", "dashed")), True)
         return M.flow_mermaid(sp), sp
     if pos in ("erd_entity", "erd_colname", "erd_coltype"):
         ent, col, typ = ("e1", "id", "bigint")
@@ -116,14 +124,18 @@ def emit(pos: str, w: str):
             col = w
         else:
             typ = w
-        e1 = S.Entity(ent, ent, (S.Column(col, typ, True, None, False), S.Column("zz", "text", False, None, False)))
+        e3 = S.Entity("e3", "e3", (S.Column("id", "bigint", True, None, False),))
+        e1 = S.Entity(ent, ent, (S.Column(col, typ, True, None, False), S.Column("zz", "text", False, None, False),
+                                 S.Column("e3id", typ, False, ("e3", "id"), True)))
         e2 = S.Entity("e2", "e2", (S.Column("id", "bigint", True, None, False),
-                                   S.Column("wid", "bigint", False, (ent, col), False)))
-        rel = S.Relation("e2", "wid", ent, col, "0..*", "RelL", False, False)
-        sp = S.ErdSpec("p", "T", None, (e1, e2), (rel,), True)
+                                   S.Column(col if col != "id" else "wid", typ, False, (ent, col), False)))
+        rels = (S.Relation("e2", e2.columns[1].name, ent, col, "0..*", "RelL", False, False),
+                S.Relation(ent, "e3id", "e3", "id", "0..1", "RelM", True, False))
+        sp = S.ErdSpec("p", "T", None, (e3, e1, e2), rels, True)
         return M.erd_mermaid(sp), sp
     sp = S.SequenceSpec("p", "T", None, (S.Participant(w, w, None), S.Participant("p2", "p2", None)),
-                        (S.Message(w, "p2", "msg1", "sync", "noteW"), S.Message("p2", w, "msg2", "return", None)),
+                        (S.Message(w, "p2", "msg1", "sync", "noteW"), S.Message("p2", w, "msg2", "return", "noteV"),
+                         S.Message(w, w, "msg3", "async", None)),
                         False)
     return M.sequence_mermaid(sp), sp
 
@@ -141,14 +153,9 @@ def probe(bundles: list[str], cases: dict[tuple[str, str], tuple[str, object]],
             ver = r.version()
             versions.append(ver)
             for key, (mmd, sp) in cases.items():
-                res = r.render(mmd)
-                if not res["ok"]:
-                    why = f"{res['stage']}: {' '.join(res['err'].split())[:90]}"
-                else:
-                    probs = label_problems(sp, res["text"])
-                    why = f"text: {probs[0][:90]}" if probs else None
-                if why:
-                    fails.setdefault(key, {})[ver] = why
+                probs = check(r, sp, mmd)
+                if probs:
+                    fails.setdefault(key, {})[ver] = " ".join(probs[0].split())[:110]
     return fails
 
 

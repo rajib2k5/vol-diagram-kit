@@ -36,6 +36,7 @@ PROBED = "tests/test_spec_validation.py::test_validator_matches_the_recorded_mer
 WALK = "tests/test_mermaid_render.py::test_reserved_id_list_matches_this_bundle"
 REJECTED = "tests/test_spec_validation.py::test_ids_mermaid_cannot_take_are_rejected"
 CLI = "tests/test_cli.py"
+POSITIONS = "tests/test_mermaid_render.py::test_gate_checks_every_text_position"
 
 # (id, what breaks, file, [(old, new), ...], tests expected to fail)
 MUTANTS = [
@@ -177,7 +178,7 @@ MUTANTS = [
     ("N15", "ids containing C4 diagram-type words allowed", "diagram_kit/spec.py",
      [(" or C4_DETECTOR_RE.search(val) is not None", "")], [REJECTED]),
     ("N16", "fk to an entity whose id was rejected reported as malformed (cascade 1)", "diagram_kit/spec.py",
-     [('if not (isinstance(val, str) and val.count(".") == 1 and _among(val.split(".")[0], bad_entity_ids)):',
+     [('if not (isinstance(val, str) and "." in val and _rejected_name(val.rsplit(".", 1)[0], bad_entity_ids)):',
        "if True:")], [ONCE]),
     ("N17", "fk to a dropped duplicate entity's column re-reported (cascade 2)", "diagram_kit/spec.py",
      [("bad_cols[eid] |= (col_names | rejected) - {c.name for c in by_id[eid].columns}", "pass")], [ONCE]),
@@ -201,19 +202,63 @@ MUTANTS = [
      [("return [f for f in files if isinstance(f, str) and f == Path(f).name and _stem_and_ext(f) is not None]",
        "return [f for f in files if isinstance(f, str)]")], [CLI]),
     ("N25", "--check reads a directory where an output goes", "diagram_kit/cli.py",
-     [("        elif not have.is_file():\n", "        elif False:\n")], [CLI]),
+     [("        if _blocked(have):\n", "        if False:\n")], [CLI]),
     ("N26", "printed remedy leaves out the hand removals", "diagram_kit/cli.py",
-     [('    lines = [f"rm -r {q(str(p.path))}" if p.kind == "blocked" else f"rm {q(str(p.path))}"\n'
-       "             for p in problems if p.by_hand]\n", "    lines = []\n")], [CLI]),
+     [('    lines = [f"rm -r -- {q(str(p.path))}" if p.kind == "blocked" and not p.path.is_symlink()\n'
+       '             else f"rm -- {q(str(p.path))}" for p in problems if p.by_hand]\n', "    lines = []\n")], [CLI]),
     ("N27", "render gate reads text without line / element breaks", "diagram_kit/mermaid_check.py",
      [("holder.querySelectorAll('text, tspan, foreignObject, p, div, span').forEach((el) => el.after(' '));", "")],
      ["tests/test_mermaid_render.py::test_wrapped_block_label_reads_as_its_words", RENDER]),
-    ("N28", "render gate checks presence, not how often a label is shown", "diagram_kit/mermaid_check.py",
-     [("if have < need:", "if have < 1:")], ["tests/test_mermaid.py::test_gate_counts_each_use_of_a_label"]),
     ("N29", "--verify-mermaid exits 0 on lost labels", "diagram_kit/cli.py",
      [('                print(f"    - {line}", file=sys.stderr)\n        return 1\n',
        '                print(f"    - {line}", file=sys.stderr)\n        return 0\n')],
      ["tests/test_cli.py::test_verify_mermaid_fails_with_a_per_label_diff_when_an_escape_is_missing"]),
+    # --- the third review: its surviving mutants (G*, E1, R2, R3, C1-C3) and one per fix made for it
+    ("G3", "gate stops checking sequence notes", "diagram_kit/mermaid_check.py",
+     [('note=fn(f"{p}.note", it.note) if it.note else None', "note=it.note")], [POSITIONS]),
+    ("G4", "gate stops checking titles", "diagram_kit/mermaid_check.py",
+     [('    title = fn("title", spec.title)', "    title = spec.title")], [POSITIONS]),
+    ("G5", "gate passes a file Mermaid cannot parse", "diagram_kit/mermaid_check.py",
+     [("""return [f"Mermaid failed to {res['stage']}: {res['err']}"]""", "return []")],
+     ["tests/test_mermaid_render.py::test_gate_reports_a_parse_failure"]),
+    ("G6", "gate stops checking flow edge labels", "diagram_kit/mermaid_check.py",
+     [('label=fn(f"edges[{i}].label", e.label) if e.label else None', "label=e.label")], [POSITIONS]),
+    ("G7", "gate ignores text Mermaid adds right after a label (a hyphen)", "diagram_kit/mermaid_check.py",
+     [("if (a < i2 and i1 < b) or (i1 == i2 and a <= i1 <= b)]", "if a < i2 and i1 < b]")],
+     ["tests/test_mermaid.py::test_gate_compares_with_the_token_rendering"]),
+    ("G8", "gate back to substring counts (the third review's false pass)", "diagram_kit/mermaid_check.py",
+     [("    if expected == rendered:\n        return []\n",
+       "    if all(rendered.count(t) >= expected.count(t) for _, _, _, t in spans):\n        return []\n")],
+     ["tests/test_mermaid.py::test_gate_compares_with_the_token_rendering",
+      "tests/test_mermaid_render.py::test_gate_reports_a_hyphenated_block_label"]),
+    ("E1", "'direction' escaped only in lower case", "diagram_kit/mermaid.py",
+     [('r"[dD](?=[iI]', 'r"d(?=[iI]')], [RENDER]),
+    ("R2", "Markdown-emphasis ERD column types allowed", "diagram_kit/spec.py",
+     [('if mermaid_reserved("erd_coltype", ctype) or ERD_MARKDOWN_ID_RE.match(ctype):',
+       'if mermaid_reserved("erd_coltype", ctype):')], [REJECTED]),
+    ("R3", "C4 rename suggestion is itself rejected", "diagram_kit/spec.py",
+     [('return C4_DETECTOR_RE.sub(lambda m: "c4" + m.group()[2:], val)', 'return val + "_id"')],
+     ["tests/test_spec_validation.py::test_every_suggested_rename_is_accepted"]),
+    ("C1", "build deletes symlinks the manifest lists", "diagram_kit/cli.py",
+     [("if not _blocked(path) and path.is_file():", "if path.is_file() or path.is_symlink():")], [CLI]),
+    ("C2", "a stale symlink is left to the build (which never removes it)", "diagram_kit/cli.py",
+     [("by_hand=p.name not in owned or _blocked(p)", "by_hand=p.name not in owned")], [CLI]),
+    ("C3", "manifest lists names that are not files", "diagram_kit/cli.py",
+     [("manifest_text(n for n in keep if (out_dir / n).is_file())", "manifest_text(keep)")], [CLI]),
+    ("C4", "outputs written through symlinks", "diagram_kit/cli.py",
+     [("return path.is_symlink() or (path.exists() and not path.is_file())",
+       "return path.exists() and not path.is_file()")], [CLI]),
+    ("C5", "--check on an --out that is a file reports missing outputs", "diagram_kit/cli.py",
+     [('    if out_dir.exists() and not out_dir.is_dir():\n        raise OutputBlocked(f"--out {out_dir} is not a directory")\n'
+       '    for name, data in expected.items():', "    for name, data in expected.items():")], [CLI]),
+    ("C6", "remedy 'rm' without '--'", "diagram_kit/cli.py",
+     [('else f"rm -- {q(str(p.path))}"', 'else f"rm {q(str(p.path))}"')], [CLI]),
+    ("K1", "fk to an entity whose id YAML read as a number re-reported", "diagram_kit/spec.py",
+     [("elif val is not None and str(val) == text:", "elif val == text:")], [ONCE]),
+    ("K2", "fk to an entity whose id YAML read as a boolean re-reported", "diagram_kit/spec.py",
+     [("if not _rejected_name(ent, bad_entity_ids):", "if not _among(ent, bad_entity_ids):")], [ONCE]),
+    ("K3", "unreadable node: empty lanes reported on top", "diagram_kit/spec.py",
+     [("lane_ref_unresolved = True  # an unreadable node may have been meant for any lane", "pass")], [ONCE]),
 ]
 
 

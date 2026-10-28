@@ -172,17 +172,25 @@ sequenceDiagram
     assert sequence_mermaid(spec) == expected
 
 
-def test_gate_counts_each_use_of_a_label():
-    """The render gate's comparison (no browser): a label used twice must be rendered twice."""
-    from diagram_kit.mermaid_check import label_problems
+def test_gate_compares_with_the_token_rendering():
+    """The render gate's comparison (no browser): each token's text must come back exactly where the token was."""
+    from diagram_kit.mermaid_check import compare_texts, placeholders
 
     spec = spec_from("""
         kind: flow
         title: Count
         nodes: [{id: a, label: fit, type: model}, {id: b, label: fit, type: model}]
         """)
-    assert label_problems(spec, "Count fit fit") == []
-    probs = label_problems(spec, "Count fit")
-    assert [p.split(";")[0] for p in probs] == ["nodes[0].label: expected 'fit' 2x, rendered 1x",
-                                                "nodes[1].label: expected 'fit' 2x, rendered 1x"]
-    assert label_problems(spec, "Count fitness") != []
+    ph = placeholders(spec)
+    assert [path for path, _ in ph.texts.values()] == ["title", "nodes[0].label", "nodes[1].label"]
+    t, a, b = ph.texts
+    base = f"{t} MODEL {a} MODEL {b}"
+    assert compare_texts(ph, base, "Count MODEL fit MODEL fit") == []
+    lost = compare_texts(ph, base, "Count MODEL fit MODEL")
+    assert [p.split(";")[0] for p in lost] == ["nodes[1].label: expected 'fit'"]
+    hyphen = compare_texts(ph, base, "Count MODEL fit- MODEL fit")
+    assert [p.split(";")[0] for p in hyphen] == ["nodes[0].label: expected 'fit'"]
+    longer = compare_texts(ph, base, "Count MODEL fit MODEL fitness")
+    assert [p.split(";")[0] for p in longer] == ["nodes[1].label: expected 'fit'"]
+    other = compare_texts(ph, base, "Count model fit MODEL fit")
+    assert other and other[0].startswith("Mermaid's own text differs")

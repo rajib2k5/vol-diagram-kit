@@ -477,6 +477,7 @@ def _flow(data: dict, name: str, v: _V) -> FlowSpec:
     for i, raw in enumerate(v.items(data, "nodes", "", required=True)):
         p = f"nodes[{i}]"
         if not v.mapping(raw, p):
+            lane_ref_unresolved = True  # an unreadable node may have been meant for any lane
             continue
         v.keys(raw, ("id", "label", "sublabel", "type", "lane"), p)
         nid = v.ident(raw, "id", p, "node", "flow_node")
@@ -578,6 +579,20 @@ def _flow_legend(data: dict, v: _V) -> tuple[bool, tuple[tuple[str, str], ...]]:
 
 
 # --------------------------------------------------------------------------- erd
+
+
+_YAML_BOOLS = {"true", "false", "yes", "no", "on", "off", "y", "n"}
+
+
+def _rejected_name(text: str, rejected: set) -> bool:
+    """Does ``text`` (part of a reference) spell one of the rejected id values (YAML may have read it as a number or bool)?"""
+    for val in rejected:
+        if isinstance(val, bool):
+            if text.lower() in _YAML_BOOLS:
+                return True
+        elif val is not None and str(val) == text:
+            return True
+    return False
 
 
 def _split_ref(val: Any) -> tuple[str, str] | None:
@@ -697,13 +712,13 @@ def _erd(data: dict, name: str, v: _V) -> ErdSpec:
     def resolve(path: str, val: Any) -> tuple[str, str] | None:
         ref = _split_ref(val)
         if ref is None:
-            # 'my-ent.id' names an entity whose id was rejected: its own error is already reported
-            if not (isinstance(val, str) and val.count(".") == 1 and _among(val.split(".")[0], bad_entity_ids)):
+            # 'my-ent.id', '123.id', 'a.b.id' name an entity whose id was rejected: its own error is already reported
+            if not (isinstance(val, str) and "." in val and _rejected_name(val.rsplit(".", 1)[0], bad_entity_ids)):
                 v.err(path, f"{val!r} must look like 'entity.column'")
             return None
         ent, col = ref
         if ent not in by_id:
-            if not _among(ent, bad_entity_ids):  # else the entity's own error is already reported
+            if not _rejected_name(ent, bad_entity_ids):  # else the entity's own error is already reported
                 v.err(path, f"unknown entity {ent!r}{_suggest(ent, sorted(by_id))}")
             return None
         names = [c.name for c in by_id[ent].columns]

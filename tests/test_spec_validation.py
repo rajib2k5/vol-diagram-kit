@@ -338,6 +338,19 @@ def test_title_with_less_than_is_rejected(kind_ok, title):
         ("kind: flow\ntitle: t\nlanes: [{id: l, label: L}, {id: k, label: K}]\n"
          "nodes: [{id: a, label: A, type: process}, {id: b, label: B, type: process, lane: k}]\n",
          "nodes[0].lane: is required because the spec declares lanes"),
+        # the third review: rejected entity ids YAML read as numbers / booleans, or with dots
+        ("kind: erd\ntitle: t\nentities:\n  - {id: 123, columns: [{name: id, type: int, pk: true}]}\n"
+         "  - {id: f, columns: [{name: id, type: int, pk: true}, {name: m, type: int, fk: 123.id}]}\n",
+         "entities[0].id: expected a string entity id, got int"),
+        ("kind: erd\ntitle: t\nentities:\n  - {id: a.b, columns: [{name: id, type: int, pk: true}]}\n"
+         "  - {id: f, columns: [{name: id, type: int, pk: true}, {name: m, type: int, fk: a.b.id}]}\n",
+         "entities[0].id: entity id 'a.b' must match"),
+        ("kind: erd\ntitle: t\nentities:\n  - {id: true, columns: [{name: id, type: int, pk: true}]}\n"
+         "  - {id: f, columns: [{name: id, type: int, pk: true}, {name: m, type: int, fk: true.id}]}\n",
+         "entities[0].id: expected a string entity id, got bool"),
+        ("kind: flow\ntitle: t\nlanes: [{id: l1, label: L}, {id: l2, label: K}]\n"
+         "nodes: [{id: a, label: A, type: process, lane: l1}, x]\n",
+         "nodes[1]: expected a mapping, got str"),
         # a lane typo with no close match may have meant any lane: no "has no nodes" on top
         ("kind: flow\ntitle: t\nlanes: [{id: ingest, label: I}, {id: model, label: M}]\n"
          "nodes: [{id: a, label: A, type: process, lane: zzzzzz}, {id: b, label: B, type: process, lane: ingest}]\n",
@@ -413,6 +426,10 @@ def test_words_mermaid_accepts_in_that_position_are_allowed(text):
          "entities[0].columns[1].type: column type 'uk[2]' is or starts with"),
         (ERD_OK.replace("{name: price, type: numeric}", "{name: price, type: __proto__}"),
          "entities[0].columns[1].type: column type '__proto__' is reserved in Mermaid's erDiagram"),
+        (ERD_OK.replace("{name: price, type: numeric}", "{name: price, type: _x_}"),
+         "entities[0].columns[1].type: column type '_x_' is reserved in Mermaid's erDiagram or starts and ends"),
+        (ERD_OK.replace("id: fill", "id: accTitle").replace("fill.quote_id", "accTitle.quote_id"),
+         "entities[1].id: entity id 'accTitle' is reserved in Mermaid's erDiagram"),
     ],
 )
 def test_ids_mermaid_cannot_take_are_rejected(text, expected):
@@ -459,3 +476,15 @@ def test_legend_map_errors():
     errs = errors_of(FLOW_OK.replace("title: T", "title: T\nlegend: {dashd: x, control: }"))
     assert errs == ["legend.dashd: unknown key (did you mean 'dashed'?); allowed: data, control, dashed",
                     "legend.control: is required"]
+
+
+def test_every_suggested_rename_is_accepted():
+    """The rename an id error suggests must itself pass, for every probed spelling the validator rejects."""
+    from diagram_kit.spec import RESERVED_FILE, suggest_id
+    from scripts.gen_mermaid_reserved import POSITIONS, casings, validator_rejects
+
+    data = json.loads(RESERVED_FILE.read_text(encoding="utf-8"))
+    extra = ["xC4Containery", "C4Dynamic", "_id_", "__x__", "_1_"]
+    bad = [(pos, v, suggest_id(v)) for v in [c for w in data["words"] for c in casings(w)] + extra for pos in POSITIONS
+           if validator_rejects(pos, v) and validator_rejects(pos, suggest_id(v))]
+    assert bad == []

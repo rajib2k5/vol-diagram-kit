@@ -29,5 +29,5 @@ entities:
 relations:
   - {from: fill.contract_id, to: contract.contract_id, label: 'fees $$ and slippage $$'}
   - {from: leg.fill_id, to: fill.fill_id, cardinality: "1..*", label: '$$x$$ $$}$$ a%%{x'}
-  - {from: quote.leg_id, to: leg.leg_id, label: 'go direction LR price * qty * mult'}
+  - {from: quote.leg_id, to: leg.leg_id, label: 'go direction LR price * qty * mult x Direction TB y'}
   - {from: quote.contract_id, to: contract.contract_id, label: 'snake_case_ id C:\data\nightly'}
