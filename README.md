@@ -498,13 +498,13 @@ rows. Rule of thumb: LR up to about four ranks, TB beyond.
 
 ## Tests and mutation check
 
-`uv run pytest -q` on a fresh clone after `uv sync`: **206 passed, 51
+`uv run pytest -q` on a fresh clone after `uv sync`: **207 passed, 51
 skipped** (measured 2026-10-28, aarch64). With `uv sync --all-extras`
-(cairosvg, Playwright): **207 passed, 50 skipped**. The remaining skips need
+(cairosvg, Playwright): **208 passed, 50 skipped**. The remaining skips need
 `DIAGRAM_KIT_MERMAID_JS` (render gate tests, 33, and the CLI gate test, 1),
 `DIAGRAM_KIT_CHROMIUM` (the CLI gate tests with a stand-in bundle, 4, and the
 Playwright PNG fallback, 1) or `DIAGRAM_KIT_MMDC` (mermaid-cli, 11); with all
-of them set: **257 passed** with the 12.2.0 bundle, and again with 11.17.2
+of them set: **258 passed** with the 12.2.0 bundle, and again with 11.17.2
 (`DIAGRAM_KIT_MERMAID_VERSION=11.17.2 DIAGRAM_KIT_MERMAID_VERSION_OK=11.17.2`).
 
 `uv run python tests/mutants.py` breaks the code one way at a time in a
@@ -527,7 +527,7 @@ second review that survived (MA3, MA4, MA10, MA12) and the fourth review's kit
 defects that passed the gate (G9-G12: edge labels, node labels, notes and
 sublabels). Each must be reported `KILLED`; the Mermaid ones need the render
 test's environment variables, and V1/V2 a Chromium, otherwise they show
-`SKIPPED`. Measured 2026-10-28 with the 12.2.0 bundle and a Chromium: **103/103 killed**.
+`SKIPPED`. Measured 2026-10-28 with the 12.2.0 bundle and a Chromium: **101/101 killed**.
 
 ## Repository layout
 
