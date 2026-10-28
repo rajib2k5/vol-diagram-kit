@@ -26,6 +26,7 @@ from .spec import Spec, SpecError, load_spec
 # is left alone and reported.
 MANIFEST = ".diagram-kit-manifest.json"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_TEMP = re.compile(r"\.(?P<name>.+)\.[A-Za-z0-9_]{8}\.tmp")  # replace_file's temp files (mkstemp's 8 characters)
 
 
 class OutputBlocked(RuntimeError):
@@ -238,7 +239,12 @@ def build(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
         path.unlink()
         removed.append(path)
     keep = {n: h for n, h in owned.items() if n not in stale}
-    keep.update({n: sha256(data) for n, data in files.items()})
+    rewritten = {p.name for p in written}
+    for n, data in files.items():
+        h = sha256(data)
+        # A file already at an output path with the output's bytes is the kit's only if the manifest says
+        # so (or with --overwrite); otherwise it is listed without a hash: never deleted automatically.
+        keep[n] = h if n in rewritten or overwrite or owned.get(n) == h else None
     text = manifest_text({n: h for n, h in keep.items() if not _blocked(out_dir / n) and (out_dir / n).is_file()})
     manifest = out_dir / MANIFEST
     if not manifest.is_file() or manifest.read_text(encoding="utf-8") != text:
@@ -248,7 +254,7 @@ def build(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
 
 @dataclass
 class Problem:
-    kind: str  # differs | missing | stale | blocked
+    kind: str  # differs | missing | stale | blocked | leftover
     path: Path
     by_hand: bool = False  # the build will not fix it: the file is not in the manifest, or is in the way
     why: str = ""  # why the kit does not treat the file as its own, when that matters
@@ -259,6 +265,8 @@ class Problem:
             note = " (not a regular file, or a symlink: remove it by hand)"
         elif self.kind == "differs" and self.why:
             note = f" ({self.why}: the build refuses to overwrite it; move it away or build with --overwrite)"
+        elif self.kind == "leftover":
+            note = f" ({self.why}; remove by hand)"
         elif self.by_hand and self.why:
             note = f" ({self.why}; remove it by hand if unwanted)"
         elif self.by_hand:
@@ -297,6 +305,11 @@ def compare(specs: list[Spec], out_dir: Path, png: bool, renderer: str | None,
     if out_dir.is_dir():
         known = {s.name: s.kind for s in specs}
         for p in sorted(out_dir.iterdir()):
+            temp = _TEMP.fullmatch(p.name)
+            if temp and (temp["name"] == MANIFEST or _stem_and_ext(temp["name"])) and not p.is_dir():
+                if only is None or (_stem_and_ext(temp["name"]) or ("",))[0] == only:
+                    problems.append(Problem("leftover", p, by_hand=True, why="leftover temp file"))
+                continue
             parsed = _stem_and_ext(p.name)
             if parsed is None or p.name in expected or not (p.is_file() or p.is_symlink()):
                 continue
@@ -334,16 +347,20 @@ def remedy(problems: list[Problem], argv0: str, args: argparse.Namespace) -> lis
     return lines + [" ".join(q(c) for c in build_command(argv0, args))]
 
 
+def _not_a_flag(path: str) -> str:
+    return f"./{path}" if path.startswith("-") else path
+
+
 def build_command(argv0: str, args: argparse.Namespace) -> list[str]:
-    cmd = ["python", argv0, str(args.specs_dir), "--out", str(args.out)]
+    """The build, for the user to paste: the interpreter running now (sys.executable), paths that cannot
+    be read as options, and never --overwrite (a printed command never replaces a file the kit did not write)."""
+    cmd = [sys.executable, _not_a_flag(argv0), _not_a_flag(str(args.specs_dir)), f"--out={args.out}"]
     if args.no_png:
         cmd.append("--no-png")
     if args.only:
-        cmd += ["--only", args.only]
+        cmd.append(f"--only={args.only}")
     if args.renderer:
-        cmd += ["--renderer", args.renderer]
-    if args.overwrite:
-        cmd.append("--overwrite")
+        cmd.append(f"--renderer={args.renderer}")
     return cmd
 
 
@@ -411,6 +428,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.out is None and not args.verify_mermaid:
         ap.error("--out is required (unless only --verify-mermaid)")
+    if args.check and args.overwrite:
+        ap.error("--check does not write, so --overwrite has nothing to do: drop one of them")
 
     if not args.specs_dir.is_dir():
         print(f"error: {args.specs_dir} is not a directory", file=sys.stderr)

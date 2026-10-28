@@ -112,7 +112,9 @@ it wrote with the sha256 of the bytes it wrote. What the build guarantees:
   written) when a file already at an output path would change and the manifest
   does not show the kit wrote it: unlisted, listed without a hash, or changed
   since. Move the file away, or rebuild with `--overwrite` to replace it. A file
-  whose bytes already equal the output is left as it is and listed.
+  that is not the kit's but whose bytes already equal the output is left as it
+  is and listed without a hash, so it is never deleted automatically (with
+  `--overwrite`, the kit takes it over and records its hash).
 - **Writing.** Every output (and the manifest) is written to a temporary file in
   `--out` and renamed into place, so a hard link at an output path is replaced,
   not written through. A symlink where an output or the manifest goes is an
@@ -124,20 +126,27 @@ it wrote with the sha256 of the bytes it wrote. What the build guarantees:
   records a file's correct hash makes the build treat that file as its own.
   Between the hash check and the delete or rename, a concurrent writer is not
   guarded against.
+- **Case-insensitive file systems** (macOS, Windows): two specs whose names
+  differ only by case (`Flow.yaml`, `flow.yaml`) write to the same files there.
 
 Commit the manifest with the outputs.
 
 `--check` regenerates every output into a temporary directory and compares it
 byte-for-byte with `--out`. It exits `1` and lists each file as `differs`,
 `missing`, `stale` (an output with no spec behind it, or a format the spec's
-kind does not produce) or `blocked` (a directory or symlink where an output or
-the manifest goes), `2` on a spec error or an `--out` that is not a directory
-(or is a symlink), `0` when everything is current. A `differs` file the build
+kind does not produce), `blocked` (a directory or symlink where an output or
+the manifest goes) or `leftover` (a `.<output>.<8 characters>.tmp` file a crashed
+build left behind; remove it by hand), `2` on a spec error, an `--out` that is
+not a directory (or is a symlink) or `--check` with `--overwrite`, `0` when
+everything is current. A `differs` file the build
 would refuse to overwrite and a `stale` file the build would keep say why. It
 never prints a command that removes, moves or overwrites a file. When the build
 alone fixes everything (missing or changed outputs, stale files the kit wrote
 that still have its hash: the build removes those), it prints that build as a
-`run:` line, which leaves `--check` clean. When a file needs your decision (not
+`run:` line, which leaves `--check` clean when pasted into a shell in the same
+directory: it names the Python that ran `--check` by its full path, so it needs
+no `uv` and no activated environment, and never includes `--overwrite`. When a
+file needs your decision (not
 written by the kit, changed since, listed without a hash, refused for
 overwriting, or a directory or symlink in the way), it prints no `run:` line,
 only the count of such files and the build to run once you have dealt with
@@ -498,13 +507,13 @@ rows. Rule of thumb: LR up to about four ranks, TB beyond.
 
 ## Tests and mutation check
 
-`uv run pytest -q` on a fresh clone after `uv sync`: **207 passed, 51
+`uv run pytest -q` on a fresh clone after `uv sync`: **211 passed, 51
 skipped** (measured 2026-10-28, aarch64). With `uv sync --all-extras`
-(cairosvg, Playwright): **208 passed, 50 skipped**. The remaining skips need
+(cairosvg, Playwright): **212 passed, 50 skipped**. The remaining skips need
 `DIAGRAM_KIT_MERMAID_JS` (render gate tests, 33, and the CLI gate test, 1),
 `DIAGRAM_KIT_CHROMIUM` (the CLI gate tests with a stand-in bundle, 4, and the
 Playwright PNG fallback, 1) or `DIAGRAM_KIT_MMDC` (mermaid-cli, 11); with all
-of them set: **258 passed** with the 12.2.0 bundle, and again with 11.17.2
+of them set: **262 passed** with the 12.2.0 bundle, and again with 11.17.2
 (`DIAGRAM_KIT_MERMAID_VERSION=11.17.2 DIAGRAM_KIT_MERMAID_VERSION_OK=11.17.2`).
 
 `uv run python tests/mutants.py` breaks the code one way at a time in a
@@ -527,7 +536,7 @@ second review that survived (MA3, MA4, MA10, MA12) and the fourth review's kit
 defects that passed the gate (G9-G12: edge labels, node labels, notes and
 sublabels). Each must be reported `KILLED`; the Mermaid ones need the render
 test's environment variables, and V1/V2 a Chromium, otherwise they show
-`SKIPPED`. Measured 2026-10-28 with the 12.2.0 bundle and a Chromium: **101/101 killed**.
+`SKIPPED`. Measured 2026-10-28 with the 12.2.0 bundle and a Chromium: **106/106 killed**.
 
 ## Repository layout
 

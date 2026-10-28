@@ -158,14 +158,12 @@ def run_lines(stderr: str) -> list[str]:
 
 
 def run_remedy(stderr: str, cwd: Path | None = None) -> None:
-    """Run every 'run: ...' line --check printed, as a user would paste them."""
+    """Paste every 'run: ...' line --check printed into bash, as a user would."""
     lines = [ln[len("run: "):] for ln in stderr.splitlines() if ln.startswith("run: ")]
     assert lines, stderr
     for line in lines:
-        argv = shlex.split(line)
-        if argv[0] == "python":
-            argv[0] = sys.executable
-        subprocess.run(argv, check=True, capture_output=True, cwd=cwd)
+        res = subprocess.run(["bash", "-c", line], capture_output=True, text=True, cwd=cwd)
+        assert res.returncode == 0, (line, res.stderr)
 
 
 def test_manifest_lists_what_the_build_wrote(built):
@@ -459,9 +457,12 @@ def test_a_manifest_without_hashes_never_deletes(built):
     assert res.returncode == 0, res.stderr
     assert (out / "gone.svg").exists() and f"kept {out / 'gone.svg'}" in res.stdout
     data = json.loads((out / ".diagram-kit-manifest.json").read_text())["files"]
-    # the current outputs are byte-identical to what the build produces, so they are listed again, with hashes
+    # byte-identical to what the build produces, but nothing shows the kit wrote them: still unverified
     assert sorted(data) == [n for n in outputs(out) if n != "gone.svg"]
-    assert all(len(h) == 64 for h in data.values())
+    assert all(h is None for h in data.values())
+    assert run(str(specs), "--out", str(out), "--overwrite").returncode == 0  # take them over, once
+    data = json.loads((out / ".diagram-kit-manifest.json").read_text())["files"]
+    assert all(len(h) == 64 for h in data.values()) and "gone.svg" not in data
 
 
 @pytest.mark.parametrize("how", ["unlisted", "edited", "listed_without_hash"])
@@ -584,7 +585,8 @@ def test_printed_remedy_never_removes_a_file_the_kit_did_not_write(built):
     (out / "backtester_daily_loop.mmd").unlink()
     res = run(str(specs), "--out", str(out), "--check")
     lines = run_lines(res.stderr)
-    assert len(lines) == 1 and lines[0].startswith("run: python ") and " rm " not in lines[0], res.stderr
+    assert len(lines) == 1 and lines[0].startswith(f"run: {shlex.quote(sys.executable)} "), res.stderr
+    assert " rm " not in lines[0] and "--overwrite" not in res.stderr
     run_remedy(res.stderr)
     assert run(str(specs), "--out", str(out), "--check").returncode == 0
     # now files that are not the kit's: unlisted, changed since, listed without a hash
@@ -594,3 +596,61 @@ def test_printed_remedy_never_removes_a_file_the_kit_did_not_write(built):
     assert res.returncode == 1 and not run_lines(res.stderr), res.stderr
     assert "2 file(s) above need your decision" in res.stderr
     assert (out / "mine.svg").read_text() == "MINE" and (out / "options_backtester_erd.mmd").read_text() == "EDITED"
+
+
+
+# ------------------------------------------------- the fifth review (data safety)
+
+
+def test_check_with_overwrite_is_rejected(built):
+    """--check never writes; with --overwrite it printed a build that overwrote the user's file (6740f00)."""
+    specs, out = built
+    (out / "iv_forecast_pipeline.svg").write_text("MINE")
+    res = run(str(specs), "--out", str(out), "--check", "--overwrite")
+    assert res.returncode == 2 and "--check does not write, so --overwrite has nothing to do" in res.stderr
+    assert (out / "iv_forecast_pipeline.svg").read_text() == "MINE"
+    res = run(str(specs), "--out", str(out), "--check")
+    assert "--overwrite" not in res.stderr.split("Then build again:")[-1]
+
+
+def test_printed_build_runs_in_a_plain_shell_even_for_paths_starting_with_a_dash(tmp_path):
+    """The run: line names the interpreter in use by its path and cannot read a path as an option."""
+    shutil.copytree(EXAMPLE_SPECS, tmp_path / "-specs")
+    res = subprocess.run([sys.executable, str(BUILD), "--out=-o", "--", "-specs"], capture_output=True, text=True,
+                         cwd=tmp_path)
+    assert res.returncode == 0, res.stderr
+    (tmp_path / "-o" / "iv_forecast_pipeline.mmd").unlink()
+    res = subprocess.run([sys.executable, str(BUILD), "--out=-o", "--check", "--", "-specs"], capture_output=True,
+                         text=True, cwd=tmp_path)
+    assert res.returncode == 1
+    run_remedy(res.stderr, cwd=tmp_path)  # pasted into bash, from the same directory
+    res = subprocess.run([sys.executable, str(BUILD), "--out=-o", "--check", "--", "-specs"], capture_output=True,
+                         text=True, cwd=tmp_path)
+    assert res.returncode == 0, res.stderr
+
+
+def test_a_byte_identical_file_the_user_placed_is_never_deleted(built, tmp_path):
+    """Not adopted: a user's copy that equals an output is listed without a hash and survives its spec."""
+    specs, out = built
+    spec = specs / "iv_forecast_pipeline.yaml"
+    (specs / "ex2.yaml").write_text(spec.read_text())
+    elsewhere = tmp_path / "elsewhere"
+    assert run(str(specs), "--out", str(elsewhere), "--only", "ex2").returncode == 0
+    shutil.copy(elsewhere / "ex2.svg", out / "ex2.svg")  # the user's copy, before ex2 is ever built here
+    res = run(str(specs), "--out", str(out))
+    assert res.returncode == 0, res.stderr
+    assert json.loads((out / ".diagram-kit-manifest.json").read_text())["files"]["ex2.svg"] is None
+    (specs / "ex2.yaml").unlink()
+    res = run(str(specs), "--out", str(out))
+    assert res.returncode == 0 and (out / "ex2.svg").exists() and f"kept {out / 'ex2.svg'}" in res.stdout
+    assert not (out / "ex2.mmd").exists()  # the kit wrote that one: removed
+
+
+def test_check_reports_a_leftover_temp_file(built):
+    specs, out = built
+    temp = out / ".iv_forecast_pipeline.svg.k3x_9qzw.tmp"
+    temp.write_text("half a file")
+    res = run(str(specs), "--out", str(out), "--check")
+    assert res.returncode == 1 and f"leftover {temp} (leftover temp file; remove by hand)" in res.stderr
+    assert not run_lines(res.stderr)
+    assert run(str(specs), "--out", str(out)).returncode == 0 and temp.read_text() == "half a file"
