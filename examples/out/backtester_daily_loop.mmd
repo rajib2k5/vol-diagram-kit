@@ -1,0 +1,30 @@
+---
+title: "Backtester daily loop"
+---
+sequenceDiagram
+    autonumber
+    participant scheduler as Scheduler
+    participant engine as Backtest engine
+    participant market as Market data
+    participant strategy as Strategy
+    participant broker as Sim broker
+    participant ledger as Ledger
+    loop for each trading day
+        scheduler->>engine: run_day(date)
+        engine->>market: load_chain(date)
+        market-->>engine: option quotes
+        engine->>engine: mark_to_market(book)
+        Note right of engine: marks at mid = (bid + ask) / 2
+        engine->>strategy: on_bar(chain, book)
+        strategy-->>engine: target orders
+        alt orders not empty
+            engine-)broker: submit(orders)
+            broker-->>engine: fills incl. slippage + fees
+            engine->>ledger: record_fills(fills)
+        else no orders
+            engine->>engine: skip execution
+        end
+        engine->>ledger: write daily_pnl + greeks
+        Note right of ledger: one row per open position
+        engine-->>scheduler: day summary
+    end

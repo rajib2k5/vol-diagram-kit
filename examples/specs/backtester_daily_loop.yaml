@@ -1,0 +1,40 @@
+# One simulated trading day inside an options backtester.
+kind: sequence
+title: Backtester daily loop
+subtitle: What happens for every trading day in the backtest window
+autonumber: true
+
+participants:
+  - {id: scheduler, label: Scheduler, type: external}
+  - {id: engine, label: Backtest engine, type: process}
+  - {id: market, label: Market data, type: store}
+  - {id: strategy, label: Strategy, type: model}
+  - {id: broker, label: Sim broker, type: external}
+  - {id: ledger, label: Ledger, type: store}
+
+messages:
+  - loop: for each trading day
+    messages:
+      - {from: scheduler, to: engine, label: run_day(date)}
+      - {from: engine, to: market, label: load_chain(date)}
+      - {from: market, to: engine, label: option quotes, kind: return}
+      - from: engine
+        to: engine
+        label: mark_to_market(book)
+        note: "marks at mid = (bid + ask) / 2"
+      - {from: engine, to: strategy, label: "on_bar(chain, book)"}
+      - {from: strategy, to: engine, label: target orders, kind: return}
+      - alt:
+          - when: orders not empty
+            messages:
+              - {from: engine, to: broker, label: submit(orders), kind: async}
+              - {from: broker, to: engine, label: fills incl. slippage + fees, kind: return}
+              - {from: engine, to: ledger, label: record_fills(fills)}
+          - when: no orders
+            messages:
+              - {from: engine, to: engine, label: skip execution}
+      - from: engine
+        to: ledger
+        label: write daily_pnl + greeks
+        note: one row per open position
+      - {from: engine, to: scheduler, label: day summary, kind: return}

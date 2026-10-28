@@ -1,0 +1,55 @@
+---
+title: "Implied-vol forecasting pipeline"
+---
+flowchart LR
+    subgraph ingest["Ingest"]
+        cboe(["CBOE CSV<br/><small>EOD option chains</small>"])
+        yfinance{{"yfinance<br/><small>spot + VIX history</small>"}}
+    end
+    subgraph data["Data platform"]
+        raw[("Raw store<br/><small>partitioned Parquet</small>")]
+        features["Feature builder<br/><small>RV 1d/5d/22d, ATM IV, skew</small>"]
+    end
+    subgraph modeling["Modeling"]
+        har[["HAR-RV<br/><small>OLS on realized vol lags</small>"]]
+        garch[["GARCH(1,1)<br/><small>Student-t innovations</small>"]]
+        lstm[["LSTM<br/><small>60-day lookback window</small>"]]
+        evaluation["Evaluation<br/><small>QLIKE, MSE, Diebold-Mariano</small>"]
+    end
+    subgraph delivery["Delivery"]
+        export[/"JSON export<br/><small>forecasts.json per tenor</small>"/]
+        app("React app<br/><small>term-structure explorer</small>")
+    end
+    cboe -->|daily CSV| raw
+    yfinance -->|REST pull| raw
+    raw --> features
+    features --> har
+    features --> garch
+    features --> lstm
+    har --> evaluation
+    garch --> evaluation
+    lstm --> evaluation
+    raw -.->|realized vol| evaluation
+    evaluation -->|best model| export
+    export -->|fetch| app
+    evaluation ==>|retrain trigger| features
+    classDef source fill:#E0F2FE,stroke:#0284C7,color:#0F172A
+    class cboe source
+    classDef store fill:#FEF3C7,stroke:#D97706,color:#0F172A
+    class raw store
+    classDef process fill:#E0E7FF,stroke:#4F46E5,color:#0F172A
+    class features,evaluation process
+    classDef model fill:#EDE9FE,stroke:#7C3AED,color:#0F172A
+    class har,garch,lstm model
+    classDef output fill:#D1FAE5,stroke:#059669,color:#0F172A
+    class export output
+    classDef external fill:#F1F5F9,stroke:#475569,color:#0F172A
+    class yfinance external
+    classDef ui fill:#FCE7F3,stroke:#DB2777,color:#0F172A
+    class app ui
+    style ingest fill:#F1F5F9,stroke:#E2E8F0,color:#64748B
+    style data fill:#EFF6FF,stroke:#DBEAFE,color:#64748B
+    style modeling fill:#F5F3FF,stroke:#E9E5FD,color:#64748B
+    style delivery fill:#ECFDF5,stroke:#D1FAE5,color:#64748B
+    linkStyle 9 stroke:#94A3B8
+    linkStyle 12 stroke:#6366F1

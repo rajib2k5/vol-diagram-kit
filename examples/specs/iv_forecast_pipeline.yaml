@@ -1,0 +1,103 @@
+# End-to-end architecture of an implied-volatility forecasting pipeline.
+kind: flow
+title: Implied-vol forecasting pipeline
+subtitle: Daily batch from raw option quotes to the React dashboard
+direction: LR
+
+lanes:
+  - id: ingest
+    label: Ingest
+  - id: data
+    label: Data platform
+  - id: modeling
+    label: Modeling
+  - id: delivery
+    label: Delivery
+
+nodes:
+  - id: cboe
+    label: CBOE CSV
+    sublabel: EOD option chains
+    type: source
+    lane: ingest
+  - id: yfinance
+    label: yfinance
+    sublabel: spot + VIX history
+    type: external
+    lane: ingest
+  - id: raw
+    label: Raw store
+    sublabel: partitioned Parquet
+    type: store
+    lane: data
+  - id: features
+    label: Feature builder
+    sublabel: RV 1d/5d/22d, ATM IV, skew
+    type: process
+    lane: data
+  - id: har
+    label: HAR-RV
+    sublabel: OLS on realized vol lags
+    type: model
+    lane: modeling
+  - id: garch
+    label: GARCH(1,1)
+    sublabel: Student-t innovations
+    type: model
+    lane: modeling
+  - id: lstm
+    label: LSTM
+    sublabel: 60-day lookback window
+    type: model
+    lane: modeling
+  - id: evaluation
+    label: Evaluation
+    sublabel: QLIKE, MSE, Diebold-Mariano
+    type: process
+    lane: modeling
+  - id: export
+    label: JSON export
+    sublabel: forecasts.json per tenor
+    type: output
+    lane: delivery
+  - id: app
+    label: React app
+    sublabel: term-structure explorer
+    type: ui
+    lane: delivery
+
+edges:
+  - from: cboe
+    to: raw
+    label: daily CSV
+  - from: yfinance
+    to: raw
+    label: REST pull
+  - from: raw
+    to: features
+  - from: features
+    to: har
+  - from: features
+    to: garch
+  - from: features
+    to: lstm
+  - from: har
+    to: evaluation
+  - from: garch
+    to: evaluation
+  - from: lstm
+    to: evaluation
+  - from: raw
+    to: evaluation
+    label: realized vol
+    style: dashed
+  - from: evaluation
+    to: export
+    label: best model
+  - from: export
+    to: app
+    label: fetch
+  - from: evaluation
+    to: features
+    label: retrain trigger
+    style: control

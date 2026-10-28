@@ -1,0 +1,86 @@
+# Storage model of an end-of-day options backtester.
+kind: erd
+title: Options backtester schema
+subtitle: Quotes in, positions and fills out, P&L and greeks per day
+
+entities:
+  - id: option_quote
+    label: option_quote
+    columns:
+      - {name: quote_id, type: bigint, pk: true}
+      - {name: contract_symbol, type: text}
+      - {name: underlying, type: text}
+      - {name: expiry, type: date}
+      - {name: strike, type: numeric}
+      - {name: option_right, type: char(1)}
+      - {name: quote_date, type: date}
+      - {name: bid, type: numeric}
+      - {name: ask, type: numeric}
+      - {name: implied_vol, type: numeric, nullable: true}
+
+  - id: position
+    label: position
+    columns:
+      - {name: position_id, type: bigint, pk: true}
+      - {name: opened_quote_id, type: bigint, fk: option_quote.quote_id}
+      - {name: contract_symbol, type: text}
+      - {name: quantity, type: integer}
+      - {name: avg_price, type: numeric}
+      - {name: opened_on, type: date}
+      - {name: closed_on, type: date, nullable: true}
+
+  - id: fill
+    label: fill
+    columns:
+      - {name: fill_id, type: bigint, pk: true}
+      - {name: position_id, type: bigint, fk: position.position_id}
+      - {name: quote_id, type: bigint, fk: option_quote.quote_id}
+      - {name: side, type: text}
+      - {name: quantity, type: integer}
+      - {name: price, type: numeric}
+      - {name: fee, type: numeric}
+      - {name: filled_at, type: timestamptz}
+
+  - id: daily_pnl
+    label: daily_pnl
+    columns:
+      - {name: position_id, type: bigint, pk: true, fk: position.position_id}
+      - {name: trade_date, type: date, pk: true}
+      - {name: realized, type: numeric}
+      - {name: unrealized, type: numeric}
+      - {name: total, type: numeric}
+
+  - id: greeks_snapshot
+    label: greeks_snapshot
+    columns:
+      - {name: snapshot_id, type: bigint, pk: true}
+      - {name: position_id, type: bigint, fk: position.position_id}
+      - {name: quote_id, type: bigint, fk: option_quote.quote_id, nullable: true}
+      - {name: as_of, type: date}
+      - {name: delta, type: numeric}
+      - {name: gamma, type: numeric}
+      - {name: vega, type: numeric}
+      - {name: theta, type: numeric}
+
+relations:
+  - from: position.opened_quote_id
+    to: option_quote.quote_id
+    cardinality: "0..*"
+    label: opens
+  - from: fill.position_id
+    to: position.position_id
+    cardinality: "1..*"
+    label: executes
+  - from: fill.quote_id
+    to: option_quote.quote_id
+    cardinality: "0..*"
+    label: priced at
+  - from: daily_pnl.position_id
+    to: position.position_id
+    cardinality: "1..*"
+  - from: greeks_snapshot.position_id
+    to: position.position_id
+    cardinality: "0..*"
+  - from: greeks_snapshot.quote_id
+    to: option_quote.quote_id
+    cardinality: "0..*"

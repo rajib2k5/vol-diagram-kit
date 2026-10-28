@@ -1,0 +1,58 @@
+---
+title: "Options backtester schema"
+---
+erDiagram
+    option_quote {
+        bigint quote_id PK
+        text contract_symbol
+        text underlying
+        date expiry
+        numeric strike
+        char(1) option_right
+        date quote_date
+        numeric bid
+        numeric ask
+        numeric implied_vol "nullable"
+    }
+    position {
+        bigint position_id PK
+        bigint opened_quote_id FK
+        text contract_symbol
+        integer quantity
+        numeric avg_price
+        date opened_on
+        date closed_on "nullable"
+    }
+    fill {
+        bigint fill_id PK
+        bigint position_id FK
+        bigint quote_id FK
+        text side
+        integer quantity
+        numeric price
+        numeric fee
+        timestamptz filled_at
+    }
+    daily_pnl {
+        bigint position_id PK, FK
+        date trade_date PK
+        numeric realized
+        numeric unrealized
+        numeric total
+    }
+    greeks_snapshot {
+        bigint snapshot_id PK
+        bigint position_id FK
+        bigint quote_id FK "nullable"
+        date as_of
+        numeric delta
+        numeric gamma
+        numeric vega
+        numeric theta
+    }
+    option_quote ||--o{ position : "opens"
+    position ||--|{ fill : "executes"
+    option_quote ||--o{ fill : "priced at"
+    position ||--|{ daily_pnl : ""
+    position ||--o{ greeks_snapshot : ""
+    option_quote |o--o{ greeks_snapshot : ""
